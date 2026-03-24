@@ -175,7 +175,6 @@ async def handle_category(c: types.CallbackQuery, state: FSMContext):
     if category == "Жилое":
         kb.button(text="Квартира", callback_data="type_apartment")
         kb.button(text="Дом", callback_data="type_house")
-        kb.button(text="Комната", callback_data="type_room")
     elif category == "Нежилое":
         kb.button(text="Офис", callback_data="type_office")
         kb.button(text="Магазин", callback_data="type_shop")
@@ -184,7 +183,86 @@ async def handle_category(c: types.CallbackQuery, state: FSMContext):
         kb.button(text="Другое", callback_data="type_other")
     
     kb.button(text="⬅️ Назад", callback_data="back_to_category")
-    await send_step(c, f"Выбрана категория: <b>{category}</b>\nТеперь выберите тип:", kb.adjust(2).as_markup(), state)
+    await send_step(c.message, f"Выбрана категория: <b>{category}</b>\nТеперь выберите тип:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+# --- ОБРАБОТЧИКИ ТИПОВ ---
+@dp.callback_query(F.data.startswith("type_"))
+async def handle_realty_type(c: types.CallbackQuery, state: FSMContext):
+    type_map = {
+        "type_apartment": "Квартира",
+        "type_house": "Дом",
+        "type_room": "Комната",
+        "type_office": "Офис",
+        "type_shop": "Магазин",
+        "type_warehouse": "Склад",
+        "type_other": "Другое"
+    }
+    
+    realty_type = type_map.get(c.data)
+    if not realty_type:
+        await c.answer("❌ Неизвестный тип", show_alert=True)
+        return
+    
+    await state.update_data(realty_type=realty_type)
+    await state.set_state(PostState.city)
+    
+    kb = InlineKeyboardBuilder()
+    for city in CITIES.keys():
+        kb.button(text=city, callback_data=f"city_{city}")
+    kb.button(text="⬅️ Назад", callback_data="back_to_type")
+    await send_step(c.message, f"Выбран тип: <b>{realty_type}</b>\nТеперь выберите город:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+@dp.callback_query(F.data.startswith("city_"))
+async def handle_city(c: types.CallbackQuery, state: FSMContext):
+    city_key = c.data.replace("city_", "")
+    if city_key not in CITIES:
+        await c.answer("❌ Неизвестный город", show_alert=True)
+        return
+    
+    await state.update_data(city=city_key)
+    await state.set_state(PostState.district)
+    
+    kb = InlineKeyboardBuilder()
+    if CITIES[city_key]:
+        for district in CITIES[city_key]:
+            kb.button(text=district, callback_data=f"district_{district}")
+    else:
+        kb.button(text="Введите вручную", callback_data="district_manual")
+    
+    kb.button(text="⬅️ Назад", callback_data="back_to_city")
+    await send_step(c.message, f"Выбран город: <b>{city_key}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+@dp.callback_query(F.data == "back_to_type")
+async def back_to_type(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(PostState.realty_type)
+    category = (await state.get_data()).get('category', '')
+    
+    kb = InlineKeyboardBuilder()
+    if category == "Жилое":
+        kb.button(text="Квартира", callback_data="type_apartment")
+        kb.button(text="Дом", callback_data="type_house")
+    elif category == "Нежилое":
+        kb.button(text="Офис", callback_data="type_office")
+        kb.button(text="Магазин", callback_data="type_shop")
+        kb.button(text="Склад", callback_data="type_warehouse")
+    else:
+        kb.button(text="Другое", callback_data="type_other")
+    
+    kb.button(text="⬅️ Назад", callback_data="back_to_category")
+    await send_step(c.message, f"Выбрана категория: <b>{category}</b>\nТеперь выберите тип:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+@dp.callback_query(F.data == "back_to_city")
+async def back_to_city(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(PostState.city)
+    kb = InlineKeyboardBuilder()
+    for city in CITIES.keys():
+        kb.button(text=city, callback_data=f"city_{city}")
+    kb.button(text="⬅️ Назад", callback_data="back_to_type")
+    await send_step(c.message, "Выберите город:", kb.adjust(2).as_markup(), state)
     await c.answer()
 
 @dp.callback_query(F.data == "go_back")
