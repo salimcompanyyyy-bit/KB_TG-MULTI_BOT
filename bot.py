@@ -22,6 +22,8 @@ def init_db():
     conn = sqlite3.connect('database.db')
     conn.execute('CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, phone TEXT, role TEXT DEFAULT "staff")')
     conn.execute('CREATE TABLE IF NOT EXISTS stats (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+    conn.execute('CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, category TEXT, realty_type TEXT, city TEXT, district TEXT, street TEXT, house TEXT, total_area REAL, useful_area REAL, rooms TEXT, desc TEXT, price_val REAL, price_cur TEXT, media_type TEXT, media_files TEXT, published_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+    conn.execute('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, action TEXT, details TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     conn.commit()
     conn.close()
 
@@ -50,6 +52,7 @@ class PostState(StatesGroup):
     house = State()
     total_area = State()
     useful_area = State()
+    rooms = State()
     desc = State()
     price_val = State()
     price_cur = State()
@@ -118,8 +121,11 @@ async def profile_handler(m: types.Message, state: FSMContext):
         p = conn.execute("SELECT name, phone FROM users WHERE id=?", (m.from_user.id,)).fetchone()
     
     if p and p[0]:
-        kb = InlineKeyboardBuilder().button(text="📝 Изменить данные", callback_data="edit_p").as_markup()
-        await send_step(m, f"👤 <b>Профиль:</b> {p[0]}\n📞 <b>Тел:</b> {p[1]}", kb, state)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📝 Изменить данные", callback_data="edit_p")
+        kb.button(text="📋 Мои публикации", callback_data="my_posts")
+        kb.button(text="⬅️ Назад", callback_data="go_back")
+        await send_step(m, f"👤 <b>Профиль:</b> {p[0]}\n📞 <b>Тел:</b> {p[1]}", kb.adjust(2).as_markup(), state)
     else:
         await send_step(m, "Введите ваше Имя и Фамилию:", state=state)
         await state.set_state(ProfileState.name)
@@ -193,8 +199,9 @@ async def adm_stats(c: types.CallbackQuery):
         stats_text += f"{i}. {name} ({phone}) - {count} публикаций\n"
     
     kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Экспорт в Excel", callback_data="export_stats")
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
-    await send_step(c.message, stats_text, kb.adjust(1).as_markup(), state=None)
+    await send_step(c.message, stats_text, kb.adjust(2).as_markup(), state=None)
     await c.answer()
 
 @dp.callback_query(F.data == "back_to_admin")
@@ -204,8 +211,77 @@ async def back_to_admin(c: types.CallbackQuery, state: FSMContext):
     kb.button(text="➕ Добавить ID сотрудника", callback_data="adm_add")
     kb.button(text="⚠️ Тех. перерыв (рассылка)", callback_data="adm_maint")
     kb.button(text="📊 Статистика", callback_data="adm_stats")
+    kb.button(text="📋 Логи", callback_data="adm_logs")
+    kb.button(text="📊 Экспорт в Excel", callback_data="export_stats")
     kb.button(text="⬅️ Назад", callback_data="go_back")
     await send_step(c, "⚙️ <b>Панель администратора</b>", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+# --- ОБРАБОТЧИКИ НОВЫХ ФУНКЦИЙ ---
+@dp.callback_query(F.data == "my_posts")
+async def my_posts(c: types.CallbackQuery):
+    with sqlite3.connect('database.db') as conn:
+        # Получаем последние 10 публикаций сотрудника
+        posts = conn.execute("""
+            SELECT s.date, u.name 
+            FROM stats s 
+            JOIN users u ON s.user_id = u.id 
+            WHERE s.user_id = ? 
+            ORDER BY s.date DESC 
+            LIMIT 10
+        """, (c.from_user.id,)).fetchall()
+    
+    if not posts:
+        await send_step(c, "📋 Ваши публикации:\n\n❌ Нет данных", state=None)
+        return
+    
+    # Формируем сообщение с публикациями
+    posts_text = "📋 Ваши последние публикации:\n\n"
+    for i, (date, name) in enumerate(posts, 1):
+        posts_text += f"{i}. {name} - {date}\n"
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="go_back")
+    await send_step(c.message, posts_text, kb.adjust(1).as_markup(), state=None)
+    await c.answer()
+
+@dp.callback_query(F.data == "adm_logs")
+async def adm_logs(c: types.CallbackQuery):
+    with sqlite3.connect('database.db') as conn:
+        # Получаем последние 20 логов
+        logs = conn.execute("""
+            SELECT l.timestamp, u.name, l.action, l.details 
+            FROM logs l 
+            JOIN users u ON l.user_id = u.id 
+            ORDER BY l.timestamp DESC 
+            LIMIT 20
+        """).fetchall()
+    
+    if not logs:
+        await send_step(c, "📋 Логи действий:\n\n❌ Нет данных", state=None)
+        return
+    
+    # Формируем сообщение с логами
+    logs_text = "📋 Логи действий (последние 20):\n\n"
+    for timestamp, name, action, details in logs:
+        logs_text += f"🕐 {timestamp}\n👤 {name}\n📝 {action}\n💬 {details}\n\n"
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📊 Экспорт логов в Excel", callback_data="export_logs")
+    kb.button(text="⬅️ Назад", callback_data="back_to_admin")
+    await send_step(c.message, logs_text, kb.adjust(2).as_markup(), state=None)
+    await c.answer()
+
+@dp.callback_query(F.data == "export_stats")
+async def export_stats(c: types.CallbackQuery):
+    # Эта функция будет заглушкой, так как для реального экспорта в Excel нужно использовать дополнительные библиотеки
+    await send_step(c, "📊 Экспорт статистики в Excel:\n\n⚠️ Функция в разработке. Для получения детальной статистики обратитесь к администратору.", state=None)
+    await c.answer()
+
+@dp.callback_query(F.data == "export_logs")
+async def export_logs(c: types.CallbackQuery):
+    # Эта функция будет заглушкой, так как для реального экспорта в Excel нужно использовать дополнительные библиотеки
+    await send_step(c, "📊 Экспорт логов в Excel:\n\n⚠️ Функция в разработке. Для получения детальных логов обратитесь к администратору.", state=None)
     await c.answer()
 
 # --- СОЗДАНИЕ КАРТОЧКИ ---
@@ -444,12 +520,18 @@ async def process_total_area(m: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "useful_skip")
 async def useful_skip(c: types.CallbackQuery, state: FSMContext):
     await state.update_data(useful_area="")
-    await state.set_state(PostState.desc)
+    await state.set_state(PostState.rooms)
     
     kb = InlineKeyboardBuilder()
-    kb.button(text="Пропустить", callback_data="desc_skip")
+    kb.button(text="1", callback_data="room_1")
+    kb.button(text="2", callback_data="room_2")
+    kb.button(text="3", callback_data="room_3")
+    kb.button(text="4", callback_data="room_4")
+    kb.button(text="5", callback_data="room_5")
+    kb.button(text="6+", callback_data="room_6")
+    kb.button(text="Пропустить", callback_data="rooms_skip")
     kb.button(text="⬅️ Назад", callback_data="back_to_useful_area")
-    await send_step(c.message, "Введите описание объекта:", kb.adjust(2).as_markup(), state)
+    await send_step(c.message, "Выберите количество комнат:", kb.adjust(3).as_markup(), state)
     await c.answer()
 
 @dp.message(PostState.useful_area)
@@ -461,12 +543,18 @@ async def process_useful_area(m: types.Message, state: FSMContext):
         return
     
     await state.update_data(useful_area=area_float)
-    await state.set_state(PostState.desc)
+    await state.set_state(PostState.rooms)
     
     kb = InlineKeyboardBuilder()
-    kb.button(text="Пропустить", callback_data="desc_skip")
+    kb.button(text="1", callback_data="room_1")
+    kb.button(text="2", callback_data="room_2")
+    kb.button(text="3", callback_data="room_3")
+    kb.button(text="4", callback_data="room_4")
+    kb.button(text="5", callback_data="room_5")
+    kb.button(text="6+", callback_data="room_6")
+    kb.button(text="Пропустить", callback_data="rooms_skip")
     kb.button(text="⬅️ Назад", callback_data="back_to_useful_area")
-    await send_step(m, "Введите описание объекта:", kb.adjust(2).as_markup(), state)
+    await send_step(m, "Выберите количество комнат:", kb.adjust(3).as_markup(), state)
 
 @dp.callback_query(F.data == "desc_skip")
 async def desc_skip(c: types.CallbackQuery, state: FSMContext):
@@ -487,6 +575,59 @@ async def process_desc(m: types.Message, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Назад", callback_data="back_to_desc")
     await send_step(m, "Введите цену:", kb.adjust(1).as_markup(), state)
+
+# --- ОБРАБОТЧИКИ КОМНАТ ---
+@dp.callback_query(F.data.startswith("room_"))
+async def handle_rooms(c: types.CallbackQuery, state: FSMContext):
+    room_map = {
+        "room_1": "1",
+        "room_2": "2",
+        "room_3": "3",
+        "room_4": "4",
+        "room_5": "5",
+        "room_6": "6+"
+    }
+    
+    rooms = room_map.get(c.data)
+    if not rooms:
+        await c.answer("❌ Неизвестное количество комнат", show_alert=True)
+        return
+    
+    await state.update_data(rooms=rooms)
+    await state.set_state(PostState.desc)
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="desc_skip")
+    kb.button(text="⬅️ Назад", callback_data="back_to_rooms")
+    await send_step(c.message, "Введите описание объекта:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+@dp.callback_query(F.data == "rooms_skip")
+async def rooms_skip(c: types.CallbackQuery, state: FSMContext):
+    await state.update_data(rooms="")
+    await state.set_state(PostState.desc)
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="desc_skip")
+    kb.button(text="⬅️ Назад", callback_data="back_to_rooms")
+    await send_step(c.message, "Введите описание объекта:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+@dp.callback_query(F.data == "back_to_rooms")
+async def back_to_rooms(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(PostState.rooms)
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="1", callback_data="room_1")
+    kb.button(text="2", callback_data="room_2")
+    kb.button(text="3", callback_data="room_3")
+    kb.button(text="4", callback_data="room_4")
+    kb.button(text="5", callback_data="room_5")
+    kb.button(text="6+", callback_data="room_6")
+    kb.button(text="Пропустить", callback_data="rooms_skip")
+    kb.button(text="⬅️ Назад", callback_data="back_to_useful_area")
+    await send_step(c.message, "Выберите количество комнат:", kb.adjust(3).as_markup(), state)
+    await c.answer()
 
 @dp.message(PostState.price_val)
 async def process_price(m: types.Message, state: FSMContext):
@@ -592,7 +733,7 @@ async def back_to_media_choice(c: types.CallbackQuery, state: FSMContext):
 async def show_preview(m_obj, state: FSMContext):
     data = await state.get_data()
     
-    # Формируем текст карточки
+    # Формируем текст карточки в новом красивом стиле
     category = data.get('category', '')
     realty_type = data.get('realty_type', '')
     city = data.get('city', '')
@@ -601,6 +742,7 @@ async def show_preview(m_obj, state: FSMContext):
     house = data.get('house', '')
     total_area = data.get('total_area', '')
     useful_area = data.get('useful_area', '')
+    rooms = data.get('rooms', '')
     desc = data.get('desc', '')
     price_val = data.get('price_val', '')
     price_cur = data.get('price_cur', '')
@@ -618,36 +760,47 @@ async def show_preview(m_obj, state: FSMContext):
     area_text = ""
     if total_area:
         if useful_area:
-            area_text = f"📐 {total_area} м² (полезная: {useful_area} м²)"
+            area_text = f"📐 Площадь: {total_area} м² (полезная: {useful_area} м²)"
         else:
-            area_text = f"📐 {total_area} м²"
+            area_text = f"📐 Площадь: {total_area} м²"
+    
+    # Формируем комнаты
+    rooms_text = ""
+    if rooms:
+        rooms_text = f"🔢 Комнат: {rooms}"
     
     # Формируем цену
     price_text = ""
     if price_val and price_cur:
-        price_text = f"💰 {price_val:,} {price_cur}".replace(",", " ")
+        price_text = f"💰 ЦЕНА: {price_val:,} {price_cur}".replace(",", " ")
     
     # Формируем описание
     desc_text = ""
     if desc:
-        desc_text = f"\n\n📝 {desc}"
+        desc_text = f"📝 Детали: {desc}"
     
-    # Формируем итоговую карточку
-    card_text = f"<b>{category}</b>\n"
-    card_text += f"<b>{realty_type}</b>\n\n"
-    card_text += f"📍 {address}\n"
+    # Формируем итоговую карточку в новом стиле
+    card_text = "━━━━━━━━━━━━━━━━━━━━\n"
+    card_text += f"🏠 {category}\n\n"
+    card_text += f"🏙 Город: {city}\n"
+    card_text += f"📍 Район: {district}\n"
+    card_text += f"🏷 Тип: {realty_type}\n"
+    if rooms_text:
+        card_text += f"{rooms_text}\n"
     if area_text:
         card_text += f"{area_text}\n"
+    if desc_text:
+        card_text += f"{desc_text}\n\n"
     if price_text:
         card_text += f"{price_text}\n"
-    card_text += desc_text
     
     # Получаем имя сотрудника
     with sqlite3.connect('database.db') as conn:
         user = conn.execute("SELECT name FROM users WHERE id=?", (m_obj.from_user.id,)).fetchone()
     
     employee_name = user[0] if user else "Сотрудник"
-    card_text += f"\n\n📞 {employee_name}"
+    card_text += f"📞 Контакт: {employee_name}\n"
+    card_text += "━━━━━━━━━━━━━━━━━━━━"
     
     # Отправляем превью
     kb = InlineKeyboardBuilder()
@@ -661,7 +814,7 @@ async def show_preview(m_obj, state: FSMContext):
 async def publish_post(c: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     
-    # Формируем карточку для публикации (аналогично show_preview)
+    # Формируем карточку для публикации в новом красивом стиле
     category = data.get('category', '')
     realty_type = data.get('realty_type', '')
     city = data.get('city', '')
@@ -670,10 +823,12 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
     house = data.get('house', '')
     total_area = data.get('total_area', '')
     useful_area = data.get('useful_area', '')
+    rooms = data.get('rooms', '')
     desc = data.get('desc', '')
     price_val = data.get('price_val', '')
     price_cur = data.get('price_cur', '')
     
+    # Формируем адрес
     address_parts = [city, district]
     if street and house:
         address_parts.append(f"{street}, {house}")
@@ -682,35 +837,51 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
     
     address = ", ".join(address_parts)
     
+    # Формируем площадь
     area_text = ""
     if total_area:
         if useful_area:
-            area_text = f"📐 {total_area} м² (полезная: {useful_area} м²)"
+            area_text = f"📐 Площадь: {total_area} м² (полезная: {useful_area} м²)"
         else:
-            area_text = f"📐 {total_area} м²"
+            area_text = f"📐 Площадь: {total_area} м²"
     
+    # Формируем комнаты
+    rooms_text = ""
+    if rooms:
+        rooms_text = f"🔢 Комнат: {rooms}"
+    
+    # Формируем цену
     price_text = ""
     if price_val and price_cur:
-        price_text = f"💰 {price_val:,} {price_cur}".replace(",", " ")
+        price_text = f"💰 ЦЕНА: {price_val:,} {price_cur}".replace(",", " ")
     
+    # Формируем описание
     desc_text = ""
     if desc:
-        desc_text = f"\n\n📝 {desc}"
+        desc_text = f"📝 Детали: {desc}"
     
-    card_text = f"<b>{category}</b>\n"
-    card_text += f"<b>{realty_type}</b>\n\n"
-    card_text += f"📍 {address}\n"
+    # Формируем итоговую карточку в новом стиле
+    card_text = "━━━━━━━━━━━━━━━━━━━━\n"
+    card_text += f"🏠 {category}\n\n"
+    card_text += f"🏙 Город: {city}\n"
+    card_text += f"📍 Район: {district}\n"
+    card_text += f"🏷 Тип: {realty_type}\n"
+    if rooms_text:
+        card_text += f"{rooms_text}\n"
     if area_text:
         card_text += f"{area_text}\n"
+    if desc_text:
+        card_text += f"{desc_text}\n\n"
     if price_text:
         card_text += f"{price_text}\n"
-    card_text += desc_text
     
+    # Получаем имя сотрудника
     with sqlite3.connect('database.db') as conn:
         user = conn.execute("SELECT name FROM users WHERE id=?", (c.from_user.id,)).fetchone()
     
     employee_name = user[0] if user else "Сотрудник"
-    card_text += f"\n\n📞 {employee_name}"
+    card_text += f"📞 Контакт: {employee_name}\n"
+    card_text += "━━━━━━━━━━━━━━━━━━━━"
     
     # Публикуем в канал
     try:
@@ -727,6 +898,8 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
         # Логируем публикацию
         with sqlite3.connect('database.db') as conn:
             conn.execute("INSERT INTO stats (user_id) VALUES (?)", (c.from_user.id,))
+            conn.execute("INSERT INTO logs (user_id, action, details) VALUES (?, ?, ?)", 
+                        (c.from_user.id, "Публикация", f"Опубликована карточка: {category} - {realty_type}"))
         
         await send_step(c, "✅ Карточка успешно опубликована в канале!", reply_markup=main_menu_kb(c.from_user.id), state=state)
         
