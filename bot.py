@@ -110,7 +110,6 @@ async def admin_panel(m: types.Message, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить ID сотрудника", callback_data="adm_add")
     kb.button(text="⚠️ Тех. перерыв (рассылка)", callback_data="adm_maint")
-    kb.button(text="📊 Статистика", callback_data="adm_stats")
     kb.button(text="⬅️ Назад", callback_data="go_back")
     await send_step(m, "⚙️ <b>Панель администратора</b>", kb.adjust(2).as_markup(), state)
 
@@ -178,30 +177,8 @@ async def adm_add_process(m: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_stats")
 async def adm_stats(c: types.CallbackQuery):
-    with sqlite3.connect('database.db') as conn:
-        # Получаем статистику по сотрудникам
-        stats = conn.execute("""
-            SELECT u.name, u.phone, COUNT(s.id) as posts_count
-            FROM users u
-            LEFT JOIN stats s ON u.id = s.user_id
-            WHERE u.role = 'staff'
-            GROUP BY u.id
-            ORDER BY posts_count DESC
-        """).fetchall()
-    
-    if not stats:
-        await send_step(c, "📊 Статистика публикаций:\n\n❌ Нет данных", state=None)
-        return
-    
-    # Формируем сообщение со статистикой
-    stats_text = "📊 Статистика публикаций сотрудников:\n\n"
-    for i, (name, phone, count) in enumerate(stats, 1):
-        stats_text += f"{i}. {name} ({phone}) - {count} публикаций\n"
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📊 Экспорт в Excel", callback_data="export_stats")
-    kb.button(text="⬅️ Назад", callback_data="back_to_admin")
-    await send_step(c.message, stats_text, kb.adjust(2).as_markup(), state=None)
+    # Статистика временно скрыта
+    await send_step(c, "📊 Статистика публикаций:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
     await c.answer()
 
 @dp.callback_query(F.data == "back_to_admin")
@@ -210,9 +187,6 @@ async def back_to_admin(c: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить ID сотрудника", callback_data="adm_add")
     kb.button(text="⚠️ Тех. перерыв (рассылка)", callback_data="adm_maint")
-    kb.button(text="📊 Статистика", callback_data="adm_stats")
-    kb.button(text="📋 Логи", callback_data="adm_logs")
-    kb.button(text="📊 Экспорт в Excel", callback_data="export_stats")
     kb.button(text="⬅️ Назад", callback_data="go_back")
     await send_step(c, "⚙️ <b>Панель администратора</b>", kb.adjust(2).as_markup(), state)
     await c.answer()
@@ -247,41 +221,20 @@ async def my_posts(c: types.CallbackQuery):
 
 @dp.callback_query(F.data == "adm_logs")
 async def adm_logs(c: types.CallbackQuery):
-    with sqlite3.connect('database.db') as conn:
-        # Получаем последние 20 логов
-        logs = conn.execute("""
-            SELECT l.timestamp, u.name, l.action, l.details 
-            FROM logs l 
-            JOIN users u ON l.user_id = u.id 
-            ORDER BY l.timestamp DESC 
-            LIMIT 20
-        """).fetchall()
-    
-    if not logs:
-        await send_step(c, "📋 Логи действий:\n\n❌ Нет данных", state=None)
-        return
-    
-    # Формируем сообщение с логами
-    logs_text = "📋 Логи действий (последние 20):\n\n"
-    for timestamp, name, action, details in logs:
-        logs_text += f"🕐 {timestamp}\n👤 {name}\n📝 {action}\n💬 {details}\n\n"
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📊 Экспорт логов в Excel", callback_data="export_logs")
-    kb.button(text="⬅️ Назад", callback_data="back_to_admin")
-    await send_step(c.message, logs_text, kb.adjust(2).as_markup(), state=None)
+    # Логи временно скрыты
+    await send_step(c, "📋 Логи действий:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
     await c.answer()
 
 @dp.callback_query(F.data == "export_stats")
 async def export_stats(c: types.CallbackQuery):
-    # Эта функция будет заглушкой, так как для реального экспорта в Excel нужно использовать дополнительные библиотеки
-    await send_step(c, "📊 Экспорт статистики в Excel:\n\n⚠️ Функция в разработке. Для получения детальной статистики обратитесь к администратору.", state=None)
+    # Экспорт статистики временно скрыт
+    await send_step(c, "📊 Экспорт статистики в Excel:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
     await c.answer()
 
 @dp.callback_query(F.data == "export_logs")
 async def export_logs(c: types.CallbackQuery):
-    # Эта функция будет заглушкой, так как для реального экспорта в Excel нужно использовать дополнительные библиотеки
-    await send_step(c, "📊 Экспорт логов в Excel:\n\n⚠️ Функция в разработке. Для получения детальных логов обратитесь к администратору.", state=None)
+    # Экспорт логов временно скрыт
+    await send_step(c, "📊 Экспорт логов в Excel:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
     await c.answer()
 
 # --- СОЗДАНИЕ КАРТОЧКИ ---
