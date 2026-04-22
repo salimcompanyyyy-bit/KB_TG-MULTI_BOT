@@ -106,5 +106,6 @@ python bot.py
 ## Связанные файлы
 
 - Безопасность токена: `context/CONTEXT_SECURITY.md`
+- Идеи клиентского канала (Mini App + бот): `context/CONTEXT_КЛИЕНТСКИЙ_КАНАЛ_ИДЕИ.md`
 - Код бота: `bot.py`
 - База SQLite создаётся сама: `database.db`
