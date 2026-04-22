@@ -125,13 +125,58 @@ init_db()
 
 # --- СПИСКИ ГОРОДОВ ---
 CITIES = {
-    "Ташкент": ["Мирабадский", "Юнусабадский", "Мирзо-Улугбекский", "Чиланзарский", "Яккасарайский", "Шайхантахурский", "Алмазарский", "Сергелийский", "Яшнабадский", "Учтепинский"],
+    "Ташкент": {
+        "Ташкент": [
+            "Бектемирский район",
+            "Мирзо-Улугбекский район",
+            "Мирободский район",
+            "Сергелийский район",
+            "Учтепинский район",
+            "Чиланзарский район",
+            "Шайхантахурский район",
+            "Алмазарский район",
+            "Яккасарайский район",
+            "Яшнабадский район",
+            "Юнусабадский район",
+            "Янгихаётский район",
+        ],
+        "Область": [
+            "Бекабадский район",
+            "Бостанлыкский район",
+            "Букинский район",
+            "Зангиатинский район",
+            "Кибрайский район",
+            "Куйичирчикский район",
+            "Паркентский район",
+            "Пскентский район",
+            "Ташкентский район",
+            "Уртачирчикский район",
+            "Чиназский район",
+            "Юкоричирчикский район",
+            "Янгиюльский район",
+        ],
+    },
     "Самарканд": ["Сиабский", "Багишамальский", "Железнодорожный"],
-    "Другой город": [] 
+    "Каракалпакстан": [],
+    "Другой город": []
 }
 
 CITY_ORDER = list(CITIES.keys())
 SEARCH_CATEGORIES = ["Жилое", "Нежилое", "Спецтехника", "Оборудование"]
+
+
+def city_district_groups(city: str) -> list:
+    city_data = CITIES.get(city)
+    if isinstance(city_data, dict):
+        return list(city_data.keys())
+    return []
+
+
+def city_districts(city: str, group: Optional[str] = None) -> list:
+    city_data = CITIES.get(city, [])
+    if isinstance(city_data, dict):
+        return city_data.get(group, [])
+    return city_data
 
 BTN_ROLE_STAFF = "👔 Сотрудник"
 BTN_ROLE_CLIENT = "🛒 Клиент"
@@ -907,18 +952,59 @@ async def handle_city(c: types.CallbackQuery, state: FSMContext):
         await c.answer("❌ Неизвестный город", show_alert=True)
         return
     
-    await state.update_data(city=city_key)
+    await state.update_data(city=city_key, district_group=None)
     await state.set_state(PostState.district)
     
     kb = InlineKeyboardBuilder()
-    if CITIES[city_key]:
-        for district in CITIES[city_key]:
+    groups = city_district_groups(city_key)
+    if groups:
+        for i, group_name in enumerate(groups):
+            kb.button(text=group_name, callback_data=f"district_group_{i}")
+    elif city_districts(city_key):
+        for district in city_districts(city_key):
             kb.button(text=district, callback_data=f"district_{district}")
     else:
         kb.button(text="Введите вручную", callback_data="district_manual")
     
     kb.button(text="⬅️ Назад", callback_data="back_to_city")
-    await send_step(c.message, f"Выбран город: <b>{city_key}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    if groups:
+        await send_step(c.message, f"Выбран город: <b>{city_key}</b>\nВыберите часть региона:", kb.adjust(2).as_markup(), state)
+    else:
+        await send_step(c.message, f"Выбран город: <b>{city_key}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("district_group_"))
+async def handle_district_group(c: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    city = data.get("city")
+    groups = city_district_groups(city)
+    idx_raw = c.data.replace("district_group_", "")
+    if not idx_raw.isdigit():
+        await c.answer("❌ Неизвестная группа района", show_alert=True)
+        return
+    idx = int(idx_raw)
+    if idx < 0 or idx >= len(groups):
+        await c.answer("❌ Неизвестная группа района", show_alert=True)
+        return
+
+    selected_group = groups[idx]
+    await state.update_data(district_group=selected_group)
+    districts = city_districts(city, selected_group)
+
+    kb = InlineKeyboardBuilder()
+    if districts:
+        for district in districts:
+            kb.button(text=district, callback_data=f"district_{district}")
+    else:
+        kb.button(text="Введите вручную", callback_data="district_manual")
+    kb.button(text="⬅️ Назад", callback_data="back_to_city_group")
+    await send_step(
+        c.message,
+        f"Выбрано: <b>{selected_group}</b>\nВыберите район:",
+        kb.adjust(2).as_markup(),
+        state,
+    )
     await c.answer()
 
 # --- ОБРАБОТЧИКИ РАЙОНОВ ---
@@ -946,17 +1032,37 @@ async def district_manual(c: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "back_to_district")
 async def back_to_district(c: types.CallbackQuery, state: FSMContext):
     await state.set_state(PostState.district)
-    city = (await state.get_data()).get('city', '')
+    data = await state.get_data()
+    city = data.get('city', '')
+    district_group = data.get("district_group")
     
     kb = InlineKeyboardBuilder()
-    if CITIES[city]:
-        for district in CITIES[city]:
+    districts = city_districts(city, district_group)
+    if districts:
+        for district in districts:
             kb.button(text=district, callback_data=f"district_{district}")
     else:
         kb.button(text="Введите вручную", callback_data="district_manual")
-    
+
+    if district_group:
+        kb.button(text="⬅️ Назад", callback_data="back_to_city_group")
+        await send_step(c.message, f"Выбрано: <b>{district_group}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    else:
+        kb.button(text="⬅️ Назад", callback_data="back_to_city")
+        await send_step(c.message, f"Выбран город: <b>{city}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "back_to_city_group")
+async def back_to_city_group(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(PostState.district)
+    city = (await state.get_data()).get("city", "")
+    groups = city_district_groups(city)
+    kb = InlineKeyboardBuilder()
+    for i, group_name in enumerate(groups):
+        kb.button(text=group_name, callback_data=f"district_group_{i}")
     kb.button(text="⬅️ Назад", callback_data="back_to_city")
-    await send_step(c.message, f"Выбран город: <b>{city}</b>\nВыберите район:", kb.adjust(2).as_markup(), state)
+    await send_step(c.message, f"Выбран город: <b>{city}</b>\nВыберите часть региона:", kb.adjust(2).as_markup(), state)
     await c.answer()
 
 # --- ОБРАБОТЧИКИ УЛИЦ ---
@@ -1238,7 +1344,7 @@ async def handle_currency(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 # --- ОБРАБОТЧИКИ МЕДИА ---
-@dp.callback_query(F.data.startswith("media_"))
+@dp.callback_query(F.data.in_(["media_add", "media_skip"]))
 async def handle_media_choice(c: types.CallbackQuery, state: FSMContext):
     media_map = {
         "media_add": "add",
@@ -1255,14 +1361,12 @@ async def handle_media_choice(c: types.CallbackQuery, state: FSMContext):
         await state.set_state(PostState.preview)
         await show_preview(c.message, state)
     else:
-        await state.update_data(media_type="mixed", media_files=[])
+        await state.update_data(media_type="mixed", media_files=[], media_ui_ready=False)
         await state.set_state(PostState.media_file)
         await send_step(
             c.message,
-            "Отправьте до 10 фото/видео (можно одним альбомом).\n"
-            "Если ошиблись — удалите последнюю или очистите список.",
-            build_media_manage_kb(),
-            state,
+            "Отправьте фото/видео (до 10). После первой загрузки появятся кнопки управления.",
+            state=state,
         )
     
     await c.answer()
@@ -1282,19 +1386,16 @@ async def process_media(m: types.Message, state: FSMContext):
         return
 
     if len(current) >= 10:
-        await send_step(m, "⚠️ Достигнут лимит 10 файлов. Нажмите «✅ Готово».", build_media_manage_kb(), state)
+        await send_step(m, "⚠️ Лимит 10 файлов. Удалите лишнее или нажмите «✅ Готово».", build_media_manage_kb(), state)
         return
 
+    was_empty = len(current) == 0
     current.append(item)
     await state.update_data(media_type="mixed", media_files=current)
-    last_t = "фото" if item.get("type") == "photo" else "видео"
-    await send_step(
-        m,
-        f"✅ Добавлен(о): <b>{last_t}</b>\n{media_progress_text(current)}\n\n"
-        "Можно догружать дальше или нажмите «✅ Готово».",
-        build_media_manage_kb(),
-        state,
-    )
+    # Для альбомов не спамим сообщением на каждый элемент: показываем controls один раз.
+    if was_empty or not data.get("media_ui_ready"):
+        await state.update_data(media_ui_ready=True)
+        await send_step(m, f"✅ Принято: <b>{len(current)}/10</b>", build_media_manage_kb(), state)
 
 
 @dp.callback_query(F.data == "media_done")
@@ -1316,20 +1417,15 @@ async def media_remove_last(c: types.CallbackQuery, state: FSMContext):
         await c.answer("Список уже пуст.", show_alert=True)
         return
     removed = current.pop()
-    await state.update_data(media_files=current, media_type="mixed")
+    await state.update_data(media_files=current, media_type="mixed", media_ui_ready=bool(current))
     removed_type = "фото" if isinstance(removed, dict) and removed.get("type") == "photo" else "видео"
-    await send_step(
-        c.message,
-        f"🗑 Удалена последняя: <b>{removed_type}</b>\n{media_progress_text(current)}",
-        build_media_manage_kb(),
-        state,
-    )
+    await send_step(c.message, f"🗑 Удалена последняя: <b>{removed_type}</b>.\n{media_progress_text(current)}", build_media_manage_kb(), state)
     await c.answer()
 
 
 @dp.callback_query(F.data == "media_clear_all")
 async def media_clear_all(c: types.CallbackQuery, state: FSMContext):
-    await state.update_data(media_files=[], media_type="mixed")
+    await state.update_data(media_files=[], media_type="mixed", media_ui_ready=False)
     await send_step(
         c.message,
         "♻ Список медиа очищен.\nОтправьте новые фото/видео.",
