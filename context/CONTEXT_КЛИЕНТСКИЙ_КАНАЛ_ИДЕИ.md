@@ -46,4 +46,5 @@
 ## Связанные файлы в проекте
 
 - Запуск и окружение: [CONTEXT_RUN.md](CONTEXT_RUN.md)  
-- Безопасность (токены и т.д.): [CONTEXT_SECURITY.md](CONTEXT_SECURITY.md)
+- Безопасность (токены и т.д.): [CONTEXT_SECURITY.md](CONTEXT_SECURITY.md)  
+- Личный кабинет, нумерация объявлений, статус «висячих» кнопок: [CONTEXT_ИДЕИ_ЛК_И_СТАТУС_КНОПОК.md](CONTEXT_ИДЕИ_ЛК_И_СТАТУС_КНОПОК.md)

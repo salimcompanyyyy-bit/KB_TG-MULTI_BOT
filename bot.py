@@ -63,36 +63,58 @@ def channel_post_url(message_id: int) -> Optional[str]:
     return f"https://t.me/c/{cid.lstrip('-')}/{message_id}"
 
 
-def save_published_post(user_id: int, data: dict, channel_message_id: Optional[int]):
+def _post_row_tuple(user_id: int, data: dict, channel_message_id: Optional[int]):
     media_files = data.get('media_files') or []
     media_str = json.dumps(media_files) if isinstance(media_files, list) else str(media_files or '')
     useful = data.get('useful_area')
     if useful == '':
         useful = None
+    return (
+        user_id,
+        data.get('category'),
+        data.get('realty_type'),
+        data.get('city'),
+        data.get('district'),
+        data.get('street') or '',
+        data.get('house') or '',
+        data.get('total_area'),
+        useful,
+        data.get('rooms') or '',
+        data.get('desc') or '',
+        data.get('price_val'),
+        data.get('price_cur'),
+        data.get('media_type') or '',
+        media_str,
+        channel_message_id,
+    )
+
+
+def insert_post(user_id: int, data: dict, channel_message_id: Optional[int] = None) -> int:
+    """Вставка строки posts; возвращает id (номер объявления)."""
     with db_connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """INSERT INTO posts (user_id, category, realty_type, city, district, street, house,
             total_area, useful_area, rooms, desc, price_val, price_cur, media_type, media_files, channel_message_id)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                user_id,
-                data.get('category'),
-                data.get('realty_type'),
-                data.get('city'),
-                data.get('district'),
-                data.get('street') or '',
-                data.get('house') or '',
-                data.get('total_area'),
-                useful,
-                data.get('rooms') or '',
-                data.get('desc') or '',
-                data.get('price_val'),
-                data.get('price_cur'),
-                data.get('media_type') or '',
-                media_str,
-                channel_message_id,
-            ),
+            _post_row_tuple(user_id, data, channel_message_id),
         )
+        conn.commit()
+        return int(cur.lastrowid)
+
+
+def update_post_channel_message_id(post_id: int, channel_message_id: Optional[int]) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "UPDATE posts SET channel_message_id=? WHERE id=?",
+            (channel_message_id, post_id),
+        )
+        conn.commit()
+
+
+def delete_pending_post(post_id: int) -> None:
+    """Удалить черновик, если публикация в канал не удалась (ещё нет channel_message_id)."""
+    with db_connect() as conn:
+        conn.execute("DELETE FROM posts WHERE id=? AND channel_message_id IS NULL", (post_id,))
         conn.commit()
 
 
@@ -540,11 +562,13 @@ async def client_search_run(c: types.CallbackQuery, state: FSMContext):
     for row in rows:
         _id, cat, rtype, rcity, district, pval, pcur, ch_mid, _pdate = row
         price_h = _format_price_row(pval, pcur)
-        lines.append(f"• <b>{cat}</b> / {rtype}\n  📍 {rcity}, {district or '—'}\n  💰 {price_h}\n")
+        lines.append(
+            f"• <b>№{_id}</b> <b>{cat}</b> / {rtype}\n  📍 {rcity}, {district or '—'}\n  💰 {price_h}\n"
+        )
         url = channel_post_url(ch_mid)
         if url:
-            short = (rtype or "объект")[:18]
-            ib.button(text=f"📌 {short}", url=url)
+            short = (rtype or "объект")[:14]
+            ib.button(text=f"№{_id} · {short}", url=url)
     ib.button(text="Новый поиск", callback_data="cl_retry")
     ib.button(text="В меню клиента", callback_data="cl_done")
     await send_step(c.message, "\n".join(lines), ib.adjust(1).as_markup(), state)
@@ -1445,8 +1469,8 @@ async def back_to_media_choice(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 
-def build_card_text(data: dict, employee_name: str) -> str:
-    """Единый рендер карточки (для превью и публикации)."""
+def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = None) -> str:
+    """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts)."""
     category = data.get('category', '')
     realty_type = data.get('realty_type', '')
     city = data.get('city', '')
@@ -1472,6 +1496,8 @@ def build_card_text(data: dict, employee_name: str) -> str:
     desc_text = f"📝 Детали: {desc}" if desc else ""
 
     card_text = "━━━━━━━━━━━━━━━━━━━━\n"
+    if listing_no is not None:
+        card_text += f"🔢 Объявление №{listing_no}\n\n"
     card_text += f"🏠 {category}\n\n"
     card_text += f"🏙 Город: {city}\n"
     card_text += f"📍 Район: {district}\n"
@@ -1509,7 +1535,14 @@ async def show_preview(m_obj, state: FSMContext):
     kb.button(text="❌ Отмена", callback_data="cancel_publish")
     kb.button(text="⬅️ Назад", callback_data="back_to_media")
     
-    await send_step(m_obj, f"Предпросмотр карточки:\n\n{card_text}", kb.adjust(2).as_markup(), state)
+    await send_step(
+        m_obj,
+        "Предпросмотр карточки:\n"
+        "<i>После публикации в канале карточке будет присвоен номер объявления (№ …).</i>\n\n"
+        f"{card_text}",
+        kb.adjust(2).as_markup(),
+        state,
+    )
 
 @dp.callback_query(F.data == "publish")
 async def publish_post(c: types.CallbackQuery, state: FSMContext):
@@ -1522,10 +1555,11 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
         user = conn.execute("SELECT name FROM users WHERE id=?", (c.from_user.id,)).fetchone()
     
     employee_name = user[0] if user else "Сотрудник"
-    card_text = build_card_text(data, employee_name)
-    
+    post_id = insert_post(c.from_user.id, data, None)
+
     # Публикуем в канал
     try:
+        card_text = build_card_text(data, employee_name, listing_no=post_id)
         media_type = data.get('media_type')
         media_files = data.get('media_files', [])
         sent_msg = None
@@ -1564,19 +1598,27 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
         else:
             sent_msg = await bot.send_message(CHANNEL_ID, card_text, parse_mode="HTML")
         ch_mid = sent_msg.message_id if sent_msg else None
-        save_published_post(c.from_user.id, data, ch_mid)
+        update_post_channel_message_id(post_id, ch_mid)
         # Логируем публикацию
         with db_connect() as conn:
             conn.execute("INSERT INTO stats (user_id) VALUES (?)", (c.from_user.id,))
             conn.execute("INSERT INTO logs (user_id, action, details) VALUES (?, ?, ?)", 
-                        (c.from_user.id, "Публикация", f"Опубликована карточка: {category} - {realty_type}"))
+                        (c.from_user.id, "Публикация", f"Опубликована карточка №{post_id}: {category} - {realty_type}"))
         await state.clear()
         await state.update_data(app_mode="staff")
-        await send_step(c, "✅ Карточка успешно опубликована в канале!", reply_markup=main_menu_kb(c.from_user.id), state=state)
+        await send_step(
+            c,
+            f"✅ Карточка опубликована в канале.\n<b>Номер объявления: №{post_id}</b>",
+            reply_markup=main_menu_kb(c.from_user.id),
+            state=state,
+        )
+        await c.answer()
         
     except Exception as e:
         logging.error(f"Failed to publish post: {e}")
+        delete_pending_post(post_id)
         await send_step(c, "❌ Ошибка при публикации. Попробуйте еще раз.", state=state)
+        await c.answer()
 
 @dp.callback_query(F.data == "cancel_publish")
 async def cancel_publish(c: types.CallbackQuery, state: FSMContext):
