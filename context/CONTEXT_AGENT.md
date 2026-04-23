@@ -7,16 +7,18 @@ Scope: internal working memory for this repository.
 
 - Stack: Python bot (`bot.py`) with SQLite (`database.db`).
 - Domain: Telegram real estate workflow (staff publishing + client-facing channel usage).
-- Active idea backlog source: `context/CONTEXT_КЛИЕНТСКИЙ_ИДЕЙ.md`.
+- Active idea backlog source: `context/CONTEXT_ИДЕЙ.md`.
 - Current important behavior:
   - Listing number uses `posts.id`.
   - Manual deletion in channel does not remove DB row automatically.
   - Admin has DB delete flow for listings.
   - Large Telegram profile preview in post footer was disabled for new posts.
+  - New staff users now pass mandatory access request flow (full name, phone, Telegram username, userinfo ID).
+  - Admin staff section now has real list/cards/actions and access request moderation.
 
 ## Working Rules For Agent (EN)
 
-- Read `context/CONTEXT_КЛИЕНТСКИЙ_ИДЕЙ.md` before substantial edits.
+- Read `context/CONTEXT_ИДЕЙ.md` before substantial edits.
 - Keep diffs minimal and focused.
 - Do not revert unrelated user changes.
 - Auto-commit substantial completed changes; push only when user explicitly asks.
@@ -34,8 +36,6 @@ Scope: internal working memory for this repository.
   - `export_stats`
   - `adm_logs`
   - `export_logs`
-  - `adm_staff_list`
-  - `adm_access_requests`
   - `adm_search_posts`
 
 ---
@@ -46,16 +46,18 @@ Scope: internal working memory for this repository.
 
 - Стек: Python-бот (`bot.py`) + SQLite (`database.db`).
 - Домен: Telegram-процесс по недвижимости (публикация сотрудниками + клиентский канал).
-- Актуальный бэклог идей: `context/CONTEXT_КЛИЕНТСКИЙ_ИДЕЙ.md`.
+- Актуальный бэклог идей: `context/CONTEXT_ИДЕЙ.md`.
 - Важные текущие моменты:
   - Номер объявления берется из `posts.id`.
   - Ручное удаление поста в канале не удаляет запись из БД автоматически.
   - У админа есть сценарий удаления объявления из БД.
   - Большая плашка Telegram-профиля внизу поста отключена для новых публикаций.
+  - Новые сотрудники проходят обязательную заявку на доступ (ФИО, телефон, Telegram username, ID из @userinfobot).
+  - Раздел админки по сотрудникам теперь рабочий: список, карточка, редактирование, роли, обработка заявок.
 
 ### Рабочие правила для агента
 
-- Перед существенными правками читать `context/CONTEXT_КЛИЕНТСКИЙ_ИДЕЙ.md`.
+- Перед существенными правками читать `context/CONTEXT_ИДЕЙ.md`.
 - Держать изменения минимальными и точечными.
 - Не откатывать несвязанные изменения пользователя.
 - Существенные завершенные изменения коммитить автоматически; push делать только по явной просьбе пользователя.
@@ -73,6 +75,4 @@ Scope: internal working memory for this repository.
   - `export_stats`
   - `adm_logs`
   - `export_logs`
-  - `adm_staff_list`
-  - `adm_access_requests`
   - `adm_search_posts`

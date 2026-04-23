@@ -46,6 +46,7 @@ def init_db():
     conn.close()
     _migrate_posts_channel_message_id()
     _migrate_users_tg_username()
+    _migrate_staff_access_requests()
 
 
 def _migrate_users_tg_username():
@@ -64,6 +65,27 @@ def _migrate_posts_channel_message_id():
             conn.commit()
     except sqlite3.OperationalError:
         pass
+
+
+def _migrate_staff_access_requests():
+    with db_connect() as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS staff_access_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                full_name TEXT NOT NULL,
+                phone TEXT NOT NULL,
+                tg_username TEXT NOT NULL,
+                userinfo_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP,
+                reviewed_by INTEGER
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_req_status_date ON staff_access_requests(status, submitted_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_req_user ON staff_access_requests(user_id)")
+        conn.commit()
 
 
 def channel_post_url(message_id: int) -> Optional[str]:
@@ -249,10 +271,95 @@ def fetch_posts_filtered(city: Optional[str], category: Optional[str], realty_ty
         return conn.execute(sql, params).fetchall()
 
 def is_allowed(u_id):
-    if u_id == OWNER_ID: return True
+    if u_id == OWNER_ID:
+        return True
     with db_connect() as conn:
-        res = conn.execute("SELECT id FROM users WHERE id=?", (u_id,)).fetchone()
-        return res is not None
+        res = conn.execute("SELECT role FROM users WHERE id=?", (u_id,)).fetchone()
+        role = (res[0] if res else None) or ""
+        return role in ("staff", "admin")
+
+
+def get_user_role(u_id: int) -> Optional[str]:
+    if u_id == OWNER_ID:
+        return "owner"
+    with db_connect() as conn:
+        row = conn.execute("SELECT role FROM users WHERE id=?", (u_id,)).fetchone()
+    if not row:
+        return None
+    return (row[0] or "").strip() or None
+
+
+def can_open_admin_panel(u_id: int) -> bool:
+    if u_id == OWNER_ID:
+        return True
+    return get_user_role(u_id) == "admin"
+
+
+def get_pending_access_request(user_id: int):
+    with db_connect() as conn:
+        return conn.execute(
+            """SELECT full_name, phone, tg_username, userinfo_id, submitted_at
+               FROM staff_access_requests
+               WHERE user_id=? AND status='pending'
+               ORDER BY submitted_at DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+
+
+def upsert_pending_access_request(user_id: int, full_name: str, phone: str, tg_username: str, userinfo_id: str) -> None:
+    with db_connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM staff_access_requests WHERE user_id=? AND status='pending' ORDER BY submitted_at DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE staff_access_requests
+                   SET full_name=?, phone=?, tg_username=?, userinfo_id=?, submitted_at=CURRENT_TIMESTAMP
+                   WHERE id=?""",
+                (full_name, phone, tg_username, userinfo_id, existing[0]),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO staff_access_requests (user_id, full_name, phone, tg_username, userinfo_id, status)
+                   VALUES (?, ?, ?, ?, ?, 'pending')""",
+                (user_id, full_name, phone, tg_username, userinfo_id),
+            )
+        conn.commit()
+
+
+def fetch_staff_members(limit: int = 12, offset: int = 0):
+    with db_connect() as conn:
+        rows = conn.execute(
+            """SELECT id, name, phone, tg_username, role
+               FROM users
+               WHERE role IN ('staff','admin')
+               ORDER BY CASE WHEN role='admin' THEN 0 ELSE 1 END, name COLLATE NOCASE, id
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM users WHERE role IN ('staff','admin')").fetchone()[0]
+    return rows, int(total or 0)
+
+
+def count_user_posts(user_id: int) -> int:
+    with db_connect() as conn:
+        row = conn.execute("SELECT COUNT(*) FROM posts WHERE user_id=?", (user_id,)).fetchone()
+    return int((row[0] if row else 0) or 0)
+
+
+def fetch_pending_requests(limit: int = 12, offset: int = 0):
+    with db_connect() as conn:
+        rows = conn.execute(
+            """SELECT id, user_id, full_name, phone, tg_username, userinfo_id, submitted_at
+               FROM staff_access_requests
+               WHERE status='pending'
+               ORDER BY submitted_at DESC
+               LIMIT ? OFFSET ?""",
+            (limit, offset),
+        ).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0]
+    return rows, int(total or 0)
 
 init_db()
 
@@ -372,6 +479,17 @@ class AdminDeletePostState(StatesGroup):
     wait_id = State()
 
 
+class AccessRequestState(StatesGroup):
+    full_name = State()
+    phone = State()
+    tg_username = State()
+    userinfo_id = State()
+
+
+class AdminStaffEditState(StatesGroup):
+    value = State()
+
+
 class SearchState(StatesGroup):
     """Пошаговый поиск для клиента (город → категория)."""
     pick_city = State()
@@ -415,7 +533,7 @@ def main_menu_kb(u_id):
     kb = ReplyKeyboardBuilder()
     kb.button(text="➕ Создать карточку объекта")
     kb.button(text="👤 Личный кабинет")
-    if u_id == OWNER_ID:
+    if u_id == OWNER_ID or get_user_role(u_id) == "admin":
         kb.button(text="⚙️ Админ-панель")
     kb.button(text=BTN_ROLE_SWITCH)
     return kb.adjust(1).as_markup(resize_keyboard=True)
@@ -505,6 +623,69 @@ def build_admin_staff_kb():
     return kb.adjust(1).as_markup()
 
 
+def build_staff_entry_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Подать заявку на доступ", callback_data="req_start")
+    kb.button(text="⬅️ К выбору режима", callback_data="req_cancel")
+    return kb.adjust(1).as_markup()
+
+
+def build_staff_list_kb(rows, page: int, total: int, page_size: int):
+    kb = InlineKeyboardBuilder()
+    for user_id, name, _phone, _tg, role in rows:
+        role_mark = "👑" if role == "admin" else "👤"
+        title = (name or "Сотрудник").strip()
+        kb.button(text=f"{role_mark} {title} (ID {user_id})", callback_data=f"adm_staff_open_{user_id}")
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"adm_staff_page_{page - 1}")
+    if (page + 1) * page_size < total:
+        kb.button(text="Вперед ➡️", callback_data=f"adm_staff_page_{page + 1}")
+    kb.button(text="↩️ К разделу Сотрудники", callback_data="adm_menu_staff")
+    return kb.adjust(1).as_markup()
+
+
+def build_staff_member_actions_kb(user_id: int, role: str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Изменить ФИО", callback_data=f"adm_staff_edit_name_{user_id}")
+    kb.button(text="📞 Изменить телефон", callback_data=f"adm_staff_edit_phone_{user_id}")
+    kb.button(text="🔗 Изменить Telegram", callback_data=f"adm_staff_edit_tg_{user_id}")
+    if role == "admin":
+        kb.button(text="⬇️ Сделать staff", callback_data=f"adm_staff_role_staff_{user_id}")
+    else:
+        kb.button(text="⬆️ Сделать admin", callback_data=f"adm_staff_role_admin_{user_id}")
+    kb.button(text="🚫 Убрать из staff", callback_data=f"adm_staff_remove_{user_id}")
+    kb.button(text="⬅️ К списку сотрудников", callback_data="adm_staff_list")
+    return kb.adjust(1).as_markup()
+
+
+def build_access_requests_list_kb(rows, page: int, total: int, page_size: int):
+    kb = InlineKeyboardBuilder()
+    for _rid, user_id, full_name, _phone, _tg, _uid, _submitted in rows:
+        title = (full_name or "Без имени").strip()
+        kb.button(text=f"📥 {title} (ID {user_id})", callback_data=f"adm_req_open_{user_id}")
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"adm_req_page_{page - 1}")
+    if (page + 1) * page_size < total:
+        kb.button(text="Вперед ➡️", callback_data=f"adm_req_page_{page + 1}")
+    kb.button(text="↩️ К разделу Сотрудники", callback_data="adm_menu_staff")
+    return kb.adjust(1).as_markup()
+
+
+def build_access_request_actions_kb(user_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Одобрить -> staff", callback_data=f"adm_req_approve_{user_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"adm_req_reject_{user_id}")
+    kb.button(text="⬅️ К заявкам", callback_data="adm_access_requests")
+    return kb.adjust(1).as_markup()
+
+
+def build_request_submit_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📨 Подать заявку", callback_data="req_submit")
+    kb.button(text="❌ Отмена", callback_data="req_cancel")
+    return kb.adjust(1).as_markup()
+
+
 def build_admin_data_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="🗄 DB check", callback_data="adm_dbcheck")
@@ -579,9 +760,15 @@ async def cmd_start(m: types.Message, state: FSMContext):
 @dp.message(F.text == BTN_ROLE_STAFF)
 async def role_pick_staff(m: types.Message, state: FSMContext):
     if not is_allowed(m.from_user.id):
+        pending = get_pending_access_request(m.from_user.id)
+        pending_note = ""
+        if pending:
+            pending_note = f"\n\n🕓 Ваша заявка уже ожидает проверки (от {pending[4]}). Можно отправить заново."
         await m.answer(
-            "❌ Доступ сотрудника не оформлен. Обратитесь к администратору или выберите «Клиент».",
-            reply_markup=role_select_kb(),
+            "❌ Доступ сотрудника не оформлен.\n"
+            "Чтобы получить доступ, пройдите регистрацию и отправьте заявку администратору."
+            + pending_note,
+            reply_markup=build_staff_entry_kb(),
             parse_mode="HTML",
         )
         return
@@ -591,6 +778,120 @@ async def role_pick_staff(m: types.Message, state: FSMContext):
         reply_markup=main_menu_kb(m.from_user.id),
         parse_mode="HTML",
     )
+
+
+@dp.callback_query(F.data == "req_cancel")
+async def req_cancel(c: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await c.message.answer("Ок, выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
+    await c.answer()
+
+
+@dp.callback_query(F.data == "req_start")
+async def req_start(c: types.CallbackQuery, state: FSMContext):
+    if is_allowed(c.from_user.id):
+        await c.answer("У вас уже есть доступ сотрудника.", show_alert=True)
+        return
+    await state.set_state(AccessRequestState.full_name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data="req_cancel")
+    await send_step(
+        c.message,
+        "📝 <b>Регистрация сотрудника — шаг 1/4</b>\nВведите ФИО:",
+        kb.adjust(1).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.message(AccessRequestState.full_name)
+async def req_full_name(m: types.Message, state: FSMContext):
+    value = (m.text or "").strip()
+    if len(value) < 5:
+        await send_step(m, "❌ Введите полное ФИО (минимум 5 символов).", state=state)
+        return
+    await state.update_data(req_full_name=value)
+    await state.set_state(AccessRequestState.phone)
+    await send_step(m, "📝 <b>Шаг 2/4</b>\nВведите номер телефона в формате <code>+998XXXXXXXXX</code>:", state=state)
+
+
+@dp.message(AccessRequestState.phone)
+async def req_phone(m: types.Message, state: FSMContext):
+    value = (m.text or "").strip()
+    if not validate_phone(value):
+        await send_step(m, "❌ Неверный формат. Пример: <code>+998901234567</code>.", state=state)
+        return
+    await state.update_data(req_phone=value)
+    await state.set_state(AccessRequestState.tg_username)
+    await send_step(
+        m,
+        "📝 <b>Шаг 3/4</b>\nВведите ваш Telegram username:\n"
+        "• <code>@username</code> или <code>https://t.me/username</code>",
+        state=state,
+    )
+
+
+@dp.message(AccessRequestState.tg_username)
+async def req_tg(m: types.Message, state: FSMContext):
+    norm = normalize_telegram_username(m.text or "")
+    if norm is None or norm == "":
+        await send_step(m, "❌ Неверный username. Укажите @username (5–32 символа).", state=state)
+        return
+    await state.update_data(req_tg=norm)
+    await state.set_state(AccessRequestState.userinfo_id)
+    await send_step(
+        m,
+        "📝 <b>Шаг 4/4</b>\nВведите ваш ID из @userinfobot (только цифры):",
+        state=state,
+    )
+
+
+@dp.message(AccessRequestState.userinfo_id)
+async def req_userinfo_id(m: types.Message, state: FSMContext):
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await send_step(m, "❌ Нужен числовой ID из @userinfobot.", state=state)
+        return
+    if int(raw) != m.from_user.id:
+        await send_step(
+            m,
+            "❌ ID не совпадает с вашим Telegram ID.\n"
+            "Проверьте ID в @userinfobot и отправьте снова.",
+            state=state,
+        )
+        return
+    await state.update_data(req_userinfo_id=raw)
+    d = await state.get_data()
+    text = (
+        "<b>Проверьте данные заявки:</b>\n\n"
+        f"👤 ФИО: <b>{html.escape(d.get('req_full_name', ''))}</b>\n"
+        f"📞 Телефон: <b>{html.escape(d.get('req_phone', ''))}</b>\n"
+        f"🔗 Telegram: <b>@{html.escape(d.get('req_tg', ''))}</b>\n"
+        f"🆔 ID: <b>{html.escape(d.get('req_userinfo_id', ''))}</b>\n\n"
+        "Нажмите «Подать заявку»."
+    )
+    await send_step(m, text, build_request_submit_kb(), state)
+
+
+@dp.callback_query(F.data == "req_submit")
+async def req_submit(c: types.CallbackQuery, state: FSMContext):
+    d = await state.get_data()
+    full_name = d.get("req_full_name")
+    phone = d.get("req_phone")
+    tg = d.get("req_tg")
+    userinfo_id = d.get("req_userinfo_id")
+    if not all([full_name, phone, tg, userinfo_id]):
+        await c.answer("Сначала пройдите все шаги регистрации.", show_alert=True)
+        return
+    upsert_pending_access_request(c.from_user.id, full_name, phone, tg, userinfo_id)
+    await state.clear()
+    await c.message.answer(
+        "✅ Заявка отправлена администратору.\n"
+        "Ожидайте одобрения. После этого режим «Сотрудник» станет доступен.",
+        reply_markup=role_select_kb(),
+        parse_mode="HTML",
+    )
+    await c.answer("Заявка отправлена")
 
 
 @dp.message(F.text == BTN_ROLE_CLIENT)
@@ -828,8 +1129,11 @@ async def import_csv_wrong_input(m: types.Message):
 
 
 # --- ГЛОБАЛЬНЫЕ КНОПКИ (СБРОС ЗАВИСАНИЙ) ---
-@dp.message(F.text == "⚙️ Админ-панель", F.from_user.id == OWNER_ID)
+@dp.message(F.text == "⚙️ Админ-панель")
 async def admin_panel(m: types.Message, state: FSMContext):
+    if not can_open_admin_panel(m.from_user.id):
+        await m.answer("Нет доступа к админ-панели.")
+        return
     await state.clear()
     await state.update_data(app_mode="staff")
     await send_step(m, "⚙️ <b>Панель администратора</b>", build_admin_panel_kb(), state)
@@ -895,6 +1199,13 @@ async def send_profile_screen(m_obj, user_id: int, state: FSMContext):
 
 @dp.message(F.text == "👤 Личный кабинет")
 async def profile_handler(m: types.Message, state: FSMContext):
+    if not is_allowed(m.from_user.id):
+        await m.answer(
+            "❌ Личный кабинет сотрудника доступен после одобрения заявки.",
+            reply_markup=build_staff_entry_kb(),
+            parse_mode="HTML",
+        )
+        return
     prev = (await state.get_data()).get("app_mode", "staff")
     await state.clear()
     await state.update_data(app_mode=prev)
@@ -1214,14 +1525,295 @@ async def adm_importcsv(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 
-@dp.callback_query(F.data == "adm_access_requests")
-async def adm_access_requests(c: types.CallbackQuery):
-    await c.answer("Заявки доступа: функция в разработке", show_alert=True)
+def _parse_page_from_callback(data: str, prefix: str) -> int:
+    if not data.startswith(prefix):
+        return 0
+    raw = data.replace(prefix, "", 1)
+    if not raw.isdigit():
+        return 0
+    return max(0, int(raw))
+
+
+async def _render_staff_list(message_obj, page: int, state: FSMContext):
+    page_size = 8
+    rows, total = fetch_staff_members(limit=page_size, offset=page * page_size)
+    if not rows:
+        await send_step(
+            message_obj,
+            "👥 <b>Сотрудники</b>\n\nСписок пуст.",
+            build_staff_list_kb([], page, total, page_size),
+            state=state,
+        )
+        return
+    text = f"👥 <b>Сотрудники</b>\nВсего: <b>{total}</b>\nСтраница: <b>{page + 1}</b>"
+    await send_step(message_obj, text, build_staff_list_kb(rows, page, total, page_size), state=state)
 
 
 @dp.callback_query(F.data == "adm_staff_list")
-async def adm_staff_list(c: types.CallbackQuery):
-    await c.answer("Список сотрудников: функция в разработке", show_alert=True)
+@dp.callback_query(F.data.startswith("adm_staff_page_"))
+async def adm_staff_list(c: types.CallbackQuery, state: FSMContext):
+    page = _parse_page_from_callback(c.data or "", "adm_staff_page_")
+    await _render_staff_list(c, page, state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("adm_staff_open_"))
+async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
+    try:
+        user_id = int((c.data or "").replace("adm_staff_open_", ""))
+    except ValueError:
+        await c.answer("Некорректный ID", show_alert=True)
+        return
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT name, phone, tg_username, role FROM users WHERE id=? AND role IN ('staff','admin')",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        await c.answer("Сотрудник не найден.", show_alert=True)
+        return
+    name, phone, tg, role = row
+    posts_count = count_user_posts(user_id)
+    tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
+    text = (
+        f"👤 <b>Карточка сотрудника</b>\n\n"
+        f"🆔 ID: <b>{user_id}</b>\n"
+        f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
+        f"🔗 Telegram: <b>{tg_text}</b>\n"
+        f"🛡 Роль: <b>{role}</b>\n"
+        f"📦 Публикаций: <b>{posts_count}</b>"
+    )
+    await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("adm_staff_edit_name_"))
+@dp.callback_query(F.data.startswith("adm_staff_edit_phone_"))
+@dp.callback_query(F.data.startswith("adm_staff_edit_tg_"))
+async def adm_staff_edit_start(c: types.CallbackQuery, state: FSMContext):
+    data = c.data or ""
+    field = "name" if "_name_" in data else ("phone" if "_phone_" in data else "tg")
+    user_id = int(data.rsplit("_", 1)[1])
+    await state.set_state(AdminStaffEditState.value)
+    await state.update_data(adm_staff_edit_uid=user_id, adm_staff_edit_field=field)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Отмена", callback_data=f"adm_staff_open_{user_id}")
+    prompts = {
+        "name": "Введите новое <b>ФИО</b> сотрудника:",
+        "phone": "Введите новый <b>телефон</b> (пример <code>+998901234567</code>):",
+        "tg": "Введите новый <b>Telegram</b> (@username или ссылку t.me). Для очистки отправьте <code>-</code>.",
+    }
+    await send_step(c, prompts[field], kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.message(AdminStaffEditState.value)
+async def adm_staff_edit_save(m: types.Message, state: FSMContext):
+    d = await state.get_data()
+    user_id = int(d.get("adm_staff_edit_uid", 0))
+    field = d.get("adm_staff_edit_field")
+    if user_id <= 0 or field not in ("name", "phone", "tg"):
+        await state.clear()
+        await send_step(m, "Сессия редактирования сброшена.", state=state)
+        return
+    raw = (m.text or "").strip()
+    with db_connect() as conn:
+        row = conn.execute("SELECT name, phone, tg_username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            await state.clear()
+            await send_step(m, "Сотрудник не найден.", state=state)
+            return
+        name, phone, tg, role = row
+        if field == "name":
+            if len(raw) < 2:
+                await send_step(m, "❌ ФИО слишком короткое.", state=state)
+                return
+            name = raw
+        elif field == "phone":
+            if not validate_phone(raw):
+                await send_step(m, "❌ Неверный формат телефона.", state=state)
+                return
+            phone = raw
+        else:
+            norm = normalize_telegram_username(raw)
+            if norm is None:
+                await send_step(m, "❌ Неверный формат Telegram.", state=state)
+                return
+            tg = None if norm == "" else norm
+        conn.execute(
+            "UPDATE users SET name=?, phone=?, tg_username=?, role=? WHERE id=?",
+            (name, phone, tg, role, user_id),
+        )
+        conn.commit()
+    await state.clear()
+    await send_step(m, "✅ Данные сотрудника обновлены.", build_staff_member_actions_kb(user_id, role), state=state)
+
+
+@dp.callback_query(F.data.startswith("adm_staff_role_"))
+async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
+    data = c.data or ""
+    parts = data.split("_")
+    if len(parts) < 5:
+        await c.answer("Некорректные данные", show_alert=True)
+        return
+    new_role = parts[3]
+    user_id = int(parts[4])
+    if user_id == OWNER_ID:
+        await c.answer("Нельзя менять роль владельца.", show_alert=True)
+        return
+    if new_role not in ("staff", "admin"):
+        await c.answer("Некорректная роль", show_alert=True)
+        return
+    with db_connect() as conn:
+        conn.execute("UPDATE users SET role=? WHERE id=?", (new_role, user_id))
+        conn.commit()
+    await c.answer(f"Роль обновлена: {new_role}")
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT name, phone, tg_username, role FROM users WHERE id=? AND role IN ('staff','admin')",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        await _render_staff_list(c, 0, state)
+        return
+    name, phone, tg, role = row
+    posts_count = count_user_posts(user_id)
+    tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
+    text = (
+        f"👤 <b>Карточка сотрудника</b>\n\n"
+        f"🆔 ID: <b>{user_id}</b>\n"
+        f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
+        f"🔗 Telegram: <b>{tg_text}</b>\n"
+        f"🛡 Роль: <b>{role}</b>\n"
+        f"📦 Публикаций: <b>{posts_count}</b>"
+    )
+    await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
+
+
+@dp.callback_query(F.data.startswith("adm_staff_remove_"))
+async def adm_staff_remove(c: types.CallbackQuery, state: FSMContext):
+    try:
+        user_id = int((c.data or "").replace("adm_staff_remove_", ""))
+    except ValueError:
+        await c.answer("Некорректный ID", show_alert=True)
+        return
+    if user_id == OWNER_ID:
+        await c.answer("Нельзя убрать владельца.", show_alert=True)
+        return
+    with db_connect() as conn:
+        conn.execute("UPDATE users SET role='client' WHERE id=?", (user_id,))
+        conn.commit()
+    await send_step(c, "✅ Доступ сотрудника снят.", state=state)
+    await _render_staff_list(c, 0, state)
+    await c.answer()
+
+
+async def _render_pending_requests(message_obj, page: int, state: FSMContext):
+    page_size = 8
+    rows, total = fetch_pending_requests(limit=page_size, offset=page * page_size)
+    if not rows:
+        await send_step(
+            message_obj,
+            "📥 <b>Заявки доступа</b>\n\nНовых заявок нет.",
+            build_access_requests_list_kb([], page, total, page_size),
+            state=state,
+        )
+        return
+    text = f"📥 <b>Заявки доступа</b>\nНовых: <b>{total}</b>\nСтраница: <b>{page + 1}</b>"
+    await send_step(message_obj, text, build_access_requests_list_kb(rows, page, total, page_size), state=state)
+
+
+@dp.callback_query(F.data == "adm_access_requests")
+@dp.callback_query(F.data.startswith("adm_req_page_"))
+async def adm_access_requests(c: types.CallbackQuery, state: FSMContext):
+    page = _parse_page_from_callback(c.data or "", "adm_req_page_")
+    await _render_pending_requests(c, page, state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("adm_req_open_"))
+async def adm_request_open(c: types.CallbackQuery, state: FSMContext):
+    user_id = int((c.data or "").replace("adm_req_open_", ""))
+    with db_connect() as conn:
+        row = conn.execute(
+            """SELECT full_name, phone, tg_username, userinfo_id, submitted_at
+               FROM staff_access_requests
+               WHERE user_id=? AND status='pending'
+               ORDER BY submitted_at DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        await c.answer("Заявка не найдена или уже обработана.", show_alert=True)
+        return
+    full_name, phone, tg, userinfo_id, submitted = row
+    text = (
+        f"📥 <b>Заявка доступа</b>\n\n"
+        f"🆔 Telegram ID: <b>{user_id}</b>\n"
+        f"👤 ФИО: <b>{html.escape(full_name)}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone)}</b>\n"
+        f"🔗 Telegram: <b>@{html.escape(tg)}</b>\n"
+        f"🪪 ID из @userinfobot: <b>{html.escape(userinfo_id)}</b>\n"
+        f"🕓 Подана: <b>{submitted}</b>"
+    )
+    await send_step(c, text, build_access_request_actions_kb(user_id), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("adm_req_approve_"))
+async def adm_request_approve(c: types.CallbackQuery, state: FSMContext):
+    user_id = int((c.data or "").replace("adm_req_approve_", ""))
+    with db_connect() as conn:
+        req = conn.execute(
+            """SELECT full_name, phone, tg_username
+               FROM staff_access_requests
+               WHERE user_id=? AND status='pending'
+               ORDER BY submitted_at DESC LIMIT 1""",
+            (user_id,),
+        ).fetchone()
+        if not req:
+            await c.answer("Заявка не найдена.", show_alert=True)
+            return
+        full_name, phone, tg = req
+        existing = conn.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
+        role = "admin" if existing and (existing[0] or "") == "admin" else "staff"
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, name, phone, role, tg_username) VALUES (?, ?, ?, ?, ?)",
+            (user_id, full_name, phone, role, tg),
+        )
+        conn.execute(
+            """UPDATE staff_access_requests
+               SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?
+               WHERE user_id=? AND status='pending'""",
+            (c.from_user.id, user_id),
+        )
+        conn.commit()
+    try:
+        await bot.send_message(user_id, "✅ Ваша заявка одобрена. Теперь вам доступен режим «Сотрудник».")
+    except Exception as e:
+        logging.warning("Failed to notify approved user %s: %s", user_id, e)
+    await c.answer("Заявка одобрена")
+    await _render_pending_requests(c, 0, state)
+
+
+@dp.callback_query(F.data.startswith("adm_req_reject_"))
+async def adm_request_reject(c: types.CallbackQuery, state: FSMContext):
+    user_id = int((c.data or "").replace("adm_req_reject_", ""))
+    with db_connect() as conn:
+        conn.execute(
+            """UPDATE staff_access_requests
+               SET status='rejected', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?
+               WHERE user_id=? AND status='pending'""",
+            (c.from_user.id, user_id),
+        )
+        conn.commit()
+    try:
+        await bot.send_message(user_id, "❌ Ваша заявка на доступ сотрудника отклонена.")
+    except Exception as e:
+        logging.warning("Failed to notify rejected user %s: %s", user_id, e)
+    await c.answer("Заявка отклонена")
+    await _render_pending_requests(c, 0, state)
 
 
 @dp.callback_query(F.data == "adm_search_posts")
