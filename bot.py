@@ -662,12 +662,12 @@ def build_staff_member_actions_kb(user_id: int, role: str):
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Изменить ФИО", callback_data=f"adm_staff_edit_name_{user_id}")
     kb.button(text="📞 Изменить телефон", callback_data=f"adm_staff_edit_phone_{user_id}")
-    kb.button(text="🔗 Изменить Telegram", callback_data=f"adm_staff_edit_tg_{user_id}")
+    kb.button(text="🔗 Изменить телеграм", callback_data=f"adm_staff_edit_tg_{user_id}")
     if role == "admin":
-        kb.button(text="⬇️ Сделать staff", callback_data=f"adm_staff_role_staff_{user_id}")
+        kb.button(text="⬇️ Сделать сотрудником", callback_data=f"adm_staff_role_staff_{user_id}")
     else:
-        kb.button(text="⬆️ Сделать admin", callback_data=f"adm_staff_role_admin_{user_id}")
-    kb.button(text="🚫 Убрать из staff", callback_data=f"adm_staff_remove_{user_id}")
+        kb.button(text="⬆️ Сделать администратором", callback_data=f"adm_staff_role_admin_{user_id}")
+    kb.button(text="🚫 Снять доступ сотрудника", callback_data=f"adm_staff_remove_{user_id}")
     kb.button(text="⬅️ К списку сотрудников", callback_data="adm_staff_list")
     return kb.adjust(1).as_markup()
 
@@ -701,7 +701,7 @@ def build_access_request_actions_kb(req_id: int, is_priority: bool):
         kb.button(text="☆ Убрать приоритет", callback_data=f"adm_req_priority_0_{req_id}")
     else:
         kb.button(text="⭐ В приоритет", callback_data=f"adm_req_priority_1_{req_id}")
-    kb.button(text="✅ Одобрить -> staff", callback_data=f"adm_req_approve_{req_id}")
+    kb.button(text="✅ Одобрить -> сотрудник", callback_data=f"adm_req_approve_{req_id}")
     kb.button(text="❌ Отклонить", callback_data=f"adm_req_reject_{req_id}")
     kb.button(text="⬅️ К заявкам", callback_data="adm_access_requests")
     return kb.adjust(1).as_markup()
@@ -1187,9 +1187,9 @@ async def adm_menu_staff(c: types.CallbackQuery, state: FSMContext):
     staff_cnt, admin_cnt, pending_cnt = staff_overview_counts()
     text = (
         "👥 <b>Раздел: Сотрудники</b>\n\n"
-        f"👤 Staff: <b>{staff_cnt}</b>\n"
-        f"👑 Admin: <b>{admin_cnt}</b>\n"
-        f"📥 Заявки pending: <b>{pending_cnt}</b>"
+        f"👤 Сотрудники: <b>{staff_cnt}</b>\n"
+        f"👑 Администраторы: <b>{admin_cnt}</b>\n"
+        f"📥 Заявки на доступ: <b>{pending_cnt}</b>"
     )
     await send_step(c, text, build_admin_staff_kb(), state=state)
     await c.answer()
