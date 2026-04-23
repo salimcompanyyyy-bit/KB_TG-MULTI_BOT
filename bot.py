@@ -86,6 +86,12 @@ def _migrate_staff_access_requests():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_req_status_date ON staff_access_requests(status, submitted_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_req_user ON staff_access_requests(user_id)")
         conn.commit()
+    try:
+        with db_connect() as conn:
+            conn.execute("ALTER TABLE staff_access_requests ADD COLUMN priority INTEGER NOT NULL DEFAULT 0")
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 def channel_post_url(message_id: int) -> Optional[str]:
@@ -351,15 +357,23 @@ def count_user_posts(user_id: int) -> int:
 def fetch_pending_requests(limit: int = 12, offset: int = 0):
     with db_connect() as conn:
         rows = conn.execute(
-            """SELECT id, user_id, full_name, phone, tg_username, userinfo_id, submitted_at
+            """SELECT id, user_id, full_name, phone, tg_username, userinfo_id, submitted_at, priority
                FROM staff_access_requests
                WHERE status='pending'
-               ORDER BY submitted_at DESC
+               ORDER BY priority DESC, submitted_at ASC
                LIMIT ? OFFSET ?""",
             (limit, offset),
         ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0]
     return rows, int(total or 0)
+
+
+def staff_overview_counts():
+    with db_connect() as conn:
+        staff_cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='staff'").fetchone()[0] or 0
+        admin_cnt = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0] or 0
+        pending_cnt = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0
+    return int(staff_cnt), int(admin_cnt), int(pending_cnt)
 
 init_db()
 
@@ -660,9 +674,10 @@ def build_staff_member_actions_kb(user_id: int, role: str):
 
 def build_access_requests_list_kb(rows, page: int, total: int, page_size: int):
     kb = InlineKeyboardBuilder()
-    for _rid, user_id, full_name, _phone, _tg, _uid, _submitted in rows:
+    for req_id, user_id, full_name, _phone, _tg, _uid, _submitted, priority in rows:
         title = (full_name or "Без имени").strip()
-        kb.button(text=f"📥 {title} (ID {user_id})", callback_data=f"adm_req_open_{user_id}")
+        p = "⭐ " if int(priority or 0) > 0 else ""
+        kb.button(text=f"{p}📥 {title} (ID {user_id})", callback_data=f"adm_req_open_{req_id}")
     if page > 0:
         kb.button(text="⬅️ Назад", callback_data=f"adm_req_page_{page - 1}")
     if (page + 1) * page_size < total:
@@ -671,10 +686,14 @@ def build_access_requests_list_kb(rows, page: int, total: int, page_size: int):
     return kb.adjust(1).as_markup()
 
 
-def build_access_request_actions_kb(user_id: int):
+def build_access_request_actions_kb(req_id: int, is_priority: bool):
     kb = InlineKeyboardBuilder()
-    kb.button(text="✅ Одобрить -> staff", callback_data=f"adm_req_approve_{user_id}")
-    kb.button(text="❌ Отклонить", callback_data=f"adm_req_reject_{user_id}")
+    if is_priority:
+        kb.button(text="☆ Убрать приоритет", callback_data=f"adm_req_priority_0_{req_id}")
+    else:
+        kb.button(text="⭐ В приоритет", callback_data=f"adm_req_priority_1_{req_id}")
+    kb.button(text="✅ Одобрить -> staff", callback_data=f"adm_req_approve_{req_id}")
+    kb.button(text="❌ Отклонить", callback_data=f"adm_req_reject_{req_id}")
     kb.button(text="⬅️ К заявкам", callback_data="adm_access_requests")
     return kb.adjust(1).as_markup()
 
@@ -1153,7 +1172,17 @@ async def adm_menu_logs(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_menu_staff")
 async def adm_menu_staff(c: types.CallbackQuery, state: FSMContext):
-    await send_step(c, "👥 <b>Раздел: Сотрудники</b>", build_admin_staff_kb(), state=state)
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    staff_cnt, admin_cnt, pending_cnt = staff_overview_counts()
+    text = (
+        "👥 <b>Раздел: Сотрудники</b>\n\n"
+        f"👤 Staff: <b>{staff_cnt}</b>\n"
+        f"👑 Admin: <b>{admin_cnt}</b>\n"
+        f"📥 Заявки pending: <b>{pending_cnt}</b>"
+    )
+    await send_step(c, text, build_admin_staff_kb(), state=state)
     await c.answer()
 
 
@@ -1549,6 +1578,9 @@ async def _render_staff_list(message_obj, page: int, state: FSMContext):
 @dp.callback_query(F.data == "adm_staff_list")
 @dp.callback_query(F.data.startswith("adm_staff_page_"))
 async def adm_staff_list(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     page = _parse_page_from_callback(c.data or "", "adm_staff_page_")
     await _render_staff_list(c, page, state)
     await c.answer()
@@ -1556,6 +1588,9 @@ async def adm_staff_list(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_staff_open_"))
 async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     try:
         user_id = int((c.data or "").replace("adm_staff_open_", ""))
     except ValueError:
@@ -1589,6 +1624,9 @@ async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("adm_staff_edit_phone_"))
 @dp.callback_query(F.data.startswith("adm_staff_edit_tg_"))
 async def adm_staff_edit_start(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     data = c.data or ""
     field = "name" if "_name_" in data else ("phone" if "_phone_" in data else "tg")
     user_id = int(data.rsplit("_", 1)[1])
@@ -1610,7 +1648,7 @@ async def adm_staff_edit_save(m: types.Message, state: FSMContext):
     d = await state.get_data()
     user_id = int(d.get("adm_staff_edit_uid", 0))
     field = d.get("adm_staff_edit_field")
-    if user_id <= 0 or field not in ("name", "phone", "tg"):
+    if user_id <= 0 or field not in ("name", "phone", "tg") or not can_open_admin_panel(m.from_user.id):
         await state.clear()
         await send_step(m, "Сессия редактирования сброшена.", state=state)
         return
@@ -1649,6 +1687,9 @@ async def adm_staff_edit_save(m: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_staff_role_"))
 async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     data = c.data or ""
     parts = data.split("_")
     if len(parts) < 5:
@@ -1691,6 +1732,9 @@ async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_staff_remove_"))
 async def adm_staff_remove(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     try:
         user_id = int((c.data or "").replace("adm_staff_remove_", ""))
     except ValueError:
@@ -1725,6 +1769,9 @@ async def _render_pending_requests(message_obj, page: int, state: FSMContext):
 @dp.callback_query(F.data == "adm_access_requests")
 @dp.callback_query(F.data.startswith("adm_req_page_"))
 async def adm_access_requests(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
     page = _parse_page_from_callback(c.data or "", "adm_req_page_")
     await _render_pending_requests(c, page, state)
     await c.answer()
@@ -1732,47 +1779,94 @@ async def adm_access_requests(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_req_open_"))
 async def adm_request_open(c: types.CallbackQuery, state: FSMContext):
-    user_id = int((c.data or "").replace("adm_req_open_", ""))
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    req_id = int((c.data or "").replace("adm_req_open_", ""))
     with db_connect() as conn:
         row = conn.execute(
-            """SELECT full_name, phone, tg_username, userinfo_id, submitted_at
+            """SELECT user_id, full_name, phone, tg_username, userinfo_id, submitted_at, priority
                FROM staff_access_requests
-               WHERE user_id=? AND status='pending'
+               WHERE id=? AND status='pending'
                ORDER BY submitted_at DESC LIMIT 1""",
-            (user_id,),
+            (req_id,),
         ).fetchone()
     if not row:
         await c.answer("Заявка не найдена или уже обработана.", show_alert=True)
         return
-    full_name, phone, tg, userinfo_id, submitted = row
+    user_id, full_name, phone, tg, userinfo_id, submitted, priority = row
     text = (
         f"📥 <b>Заявка доступа</b>\n\n"
+        f"№ заявки: <b>{req_id}</b>\n"
         f"🆔 Telegram ID: <b>{user_id}</b>\n"
         f"👤 ФИО: <b>{html.escape(full_name)}</b>\n"
         f"📞 Телефон: <b>{html.escape(phone)}</b>\n"
         f"🔗 Telegram: <b>@{html.escape(tg)}</b>\n"
         f"🪪 ID из @userinfobot: <b>{html.escape(userinfo_id)}</b>\n"
-        f"🕓 Подана: <b>{submitted}</b>"
+        f"🕓 Подана: <b>{submitted}</b>\n"
+        f"⭐ Приоритет: <b>{'Да' if int(priority or 0) > 0 else 'Нет'}</b>"
     )
-    await send_step(c, text, build_access_request_actions_kb(user_id), state=state)
+    await send_step(c, text, build_access_request_actions_kb(req_id, int(priority or 0) > 0), state=state)
     await c.answer()
+
+
+@dp.callback_query(F.data.startswith("adm_req_priority_"))
+async def adm_request_set_priority(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    parts = (c.data or "").split("_")
+    if len(parts) < 5:
+        await c.answer("Некорректные данные", show_alert=True)
+        return
+    value = 1 if parts[3] == "1" else 0
+    req_id = int(parts[4])
+    with db_connect() as conn:
+        conn.execute("UPDATE staff_access_requests SET priority=? WHERE id=? AND status='pending'", (value, req_id))
+        conn.commit()
+        row = conn.execute(
+            """SELECT user_id, full_name, phone, tg_username, userinfo_id, submitted_at, priority
+               FROM staff_access_requests
+               WHERE id=? AND status='pending'""",
+            (req_id,),
+        ).fetchone()
+    if not row:
+        await c.answer("Заявка не найдена.", show_alert=True)
+        return
+    user_id, full_name, phone, tg, userinfo_id, submitted, priority = row
+    text = (
+        f"📥 <b>Заявка доступа</b>\n\n"
+        f"№ заявки: <b>{req_id}</b>\n"
+        f"🆔 Telegram ID: <b>{user_id}</b>\n"
+        f"👤 ФИО: <b>{html.escape(full_name)}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone)}</b>\n"
+        f"🔗 Telegram: <b>@{html.escape(tg)}</b>\n"
+        f"🪪 ID из @userinfobot: <b>{html.escape(userinfo_id)}</b>\n"
+        f"🕓 Подана: <b>{submitted}</b>\n"
+        f"⭐ Приоритет: <b>{'Да' if int(priority or 0) > 0 else 'Нет'}</b>"
+    )
+    await send_step(c, text, build_access_request_actions_kb(req_id, int(priority or 0) > 0), state=state)
+    await c.answer("Приоритет обновлен")
 
 
 @dp.callback_query(F.data.startswith("adm_req_approve_"))
 async def adm_request_approve(c: types.CallbackQuery, state: FSMContext):
-    user_id = int((c.data or "").replace("adm_req_approve_", ""))
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    req_id = int((c.data or "").replace("adm_req_approve_", ""))
     with db_connect() as conn:
         req = conn.execute(
-            """SELECT full_name, phone, tg_username
+            """SELECT user_id, full_name, phone, tg_username
                FROM staff_access_requests
-               WHERE user_id=? AND status='pending'
+               WHERE id=? AND status='pending'
                ORDER BY submitted_at DESC LIMIT 1""",
-            (user_id,),
+            (req_id,),
         ).fetchone()
         if not req:
             await c.answer("Заявка не найдена.", show_alert=True)
             return
-        full_name, phone, tg = req
+        user_id, full_name, phone, tg = req
         existing = conn.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
         role = "admin" if existing and (existing[0] or "") == "admin" else "staff"
         conn.execute(
@@ -1782,8 +1876,8 @@ async def adm_request_approve(c: types.CallbackQuery, state: FSMContext):
         conn.execute(
             """UPDATE staff_access_requests
                SET status='approved', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?
-               WHERE user_id=? AND status='pending'""",
-            (c.from_user.id, user_id),
+               WHERE id=? AND status='pending'""",
+            (c.from_user.id, req_id),
         )
         conn.commit()
     try:
@@ -1796,13 +1890,18 @@ async def adm_request_approve(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("adm_req_reject_"))
 async def adm_request_reject(c: types.CallbackQuery, state: FSMContext):
-    user_id = int((c.data or "").replace("adm_req_reject_", ""))
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    req_id = int((c.data or "").replace("adm_req_reject_", ""))
     with db_connect() as conn:
+        row = conn.execute("SELECT user_id FROM staff_access_requests WHERE id=? AND status='pending'", (req_id,)).fetchone()
+        user_id = int(row[0]) if row else 0
         conn.execute(
             """UPDATE staff_access_requests
                SET status='rejected', reviewed_at=CURRENT_TIMESTAMP, reviewed_by=?
-               WHERE user_id=? AND status='pending'""",
-            (c.from_user.id, user_id),
+               WHERE id=? AND status='pending'""",
+            (c.from_user.id, req_id),
         )
         conn.commit()
     try:

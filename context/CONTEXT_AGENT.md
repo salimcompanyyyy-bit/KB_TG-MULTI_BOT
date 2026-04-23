@@ -15,6 +15,7 @@ Scope: internal working memory for this repository.
   - Large Telegram profile preview in post footer was disabled for new posts.
   - New staff users now pass mandatory access request flow (full name, phone, Telegram username, userinfo ID).
   - Admin staff section now has real list/cards/actions and access request moderation.
+  - Staff section UI was expanded: overview counters, stricter admin-only access, and request priority flag with moderation sorting.
 
 ## Working Rules For Agent (EN)
 
@@ -55,6 +56,7 @@ Scope: internal working memory for this repository.
   - Большая плашка Telegram-профиля внизу поста отключена для новых публикаций.
   - Новые сотрудники проходят обязательную заявку на доступ (ФИО, телефон, Telegram username, ID из @userinfobot).
   - Раздел админки по сотрудникам теперь рабочий: список, карточка, редактирование, роли, обработка заявок.
+  - Окно «Сотрудники» расширено: сводные счетчики, строгий доступ только админам и приоритет заявок с сортировкой для модерации.
 
 ### Рабочие правила для агента
 
