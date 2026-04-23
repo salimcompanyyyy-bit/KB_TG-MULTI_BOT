@@ -30,7 +30,7 @@ Scope: internal working memory for this repository.
 
 ## Known Pending Product Items (EN)
 
-- Choose long-term client entry from channel: Mini App vs bot DM flow (or both).
+- Client entry strategy is fixed: no Mini App, continue with current bot DM search flow.
 - Optional LK improvements: monthly publication counter, drafts.
 - Admin placeholders still pending:
   - `adm_stats`
@@ -70,7 +70,7 @@ Scope: internal working memory for this repository.
 
 ### Известные незавершенные пункты
 
-- Выбрать долгосрочный клиентский вход из канала: Mini App, личка бота или оба варианта.
+- Стратегия клиентского входа зафиксирована: без Mini App, развиваем текущий поиск через личку бота.
 - Опциональные улучшения ЛК: счетчик публикаций за месяц и черновики.
 - В админке остаются заглушки:
   - `adm_stats`
