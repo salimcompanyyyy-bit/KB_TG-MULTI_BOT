@@ -1190,10 +1190,7 @@ async def send_profile_screen(m_obj, user_id: int, state: FSMContext):
     parts = [f"👤 <b>Профиль:</b> {html.escape(p[0])}", f"📞 <b>Тел:</b> {html.escape(p[1] or '')}"]
     if p[2]:
         u = str(p[2]).strip().lstrip("@")
-        if TG_USERNAME_RE.match(u):
-            parts.append(f'🔗 <b>Telegram:</b> <a href="https://t.me/{u}">@{html.escape(u)}</a>')
-        else:
-            parts.append(f"🔗 <b>Telegram:</b> @{html.escape(u)}")
+        parts.append(f"🔗 <b>Telegram:</b> @{html.escape(u)}")
     await send_step(m_obj, "\n".join(parts), _profile_inline_kb(), state)
 
 
