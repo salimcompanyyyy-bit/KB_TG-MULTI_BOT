@@ -43,6 +43,12 @@ Scope: internal working memory for this repository.
 
 ---
 
+## Commit Type Dictionary (EN)
+
+Allowed commit types (and only these): `добавление`, `исправление`, `функция`, `рефакторинг`, `контекст`, `база`, `безопасность`, `производительность`.
+
+---
+
 ## Перевод на русский (RU)
 
 ### Снимок проекта
@@ -82,3 +88,7 @@ Scope: internal working memory for this repository.
   - `adm_logs`
   - `export_logs`
   - `adm_search_posts`
+
+### Словарь типов коммитов
+
+Разрешены только эти типы коммитов: `добавление`, `исправление`, `функция`, `рефакторинг`, `контекст`, `база`, `безопасность`, `производительность`.
