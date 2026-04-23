@@ -19,6 +19,8 @@ API_TOKEN = 'REDACTED_HISTORICAL_LEAK'
 CHANNEL_ID = '@KapitalBank_Assets' 
 OWNER_ID = 120960192  
 DB_PATH = "database.db"
+# Рамка карточки в канале (одинаковая длина во всех объявлениях)
+CARD_DECO_LINE = "━" * 32
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -1853,10 +1855,13 @@ def build_card_text(
     price_text = f"💰 ЦЕНА: {price_val:,} {price_cur}".replace(",", " ") if price_val and price_cur else ""
     desc_text = f"📝 Детали: {desc}" if desc else ""
 
-    card_text = "━━━━━━━━━━━━━━━━━━━━\n"
+    dbl = f"{CARD_DECO_LINE}\n{CARD_DECO_LINE}\n"
+    sep = f"{CARD_DECO_LINE}\n"
+
+    card_text = dbl
     if listing_no is not None:
-        card_text += f"🔢 <b>Объявление №{listing_no}</b>\n\n"
-    card_text += f"🏠 {category}\n\n"
+        card_text += f"🔢 <b>Объявление №{listing_no}</b>\n{sep}"
+    card_text += f"🏠 {category}\n{sep}"
     card_text += f"🏙 Город: {city}\n"
     card_text += f"📍 Район: {district}\n"
     if street:
@@ -1868,10 +1873,11 @@ def build_card_text(
     if area_text:
         card_text += f"{area_text}\n"
     if desc_text:
-        card_text += f"{desc_text}\n\n"
+        card_text += f"{desc_text}\n"
+    card_text += sep
     if price_text:
-        card_text += f"{price_text}\n"
-    # Контакт в объявлении: две строки — 1) ФИО, 2) телефон и @username
+        card_text += f"{price_text}\n{sep}"
+    # Контакт: 1) ФИО, 2) телефон и @username
     card_text += f"{emp}\n"
     line2: list[str] = []
     if contact_phone and str(contact_phone).strip():
@@ -1884,7 +1890,7 @@ def build_card_text(
             line2.append(f"@{html.escape(u)}")
     if line2:
         card_text += " ".join(line2) + "\n"
-    card_text += "━━━━━━━━━━━━━━━━━━━━"
+    card_text += dbl.rstrip("\n")
     return card_text
 
 
