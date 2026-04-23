@@ -1586,6 +1586,31 @@ async def _render_staff_list(message_obj, page: int, state: FSMContext):
     await send_step(message_obj, text, build_staff_list_kb(rows, page, total, page_size), state=state)
 
 
+async def _render_staff_card(message_obj, user_id: int, state: FSMContext):
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT name, phone, tg_username, role FROM users WHERE id=? AND role IN ('staff','admin')",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        await send_step(message_obj, "Сотрудник не найден.", state=state)
+        return
+    name, phone, tg, role = row
+    posts_count = count_user_posts(user_id)
+    tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
+    role_text = role_label_ru(role, user_id)
+    text = (
+        f"👤 <b>Карточка сотрудника</b>\n\n"
+        f"🆔 ID: <b>{user_id}</b>\n"
+        f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
+        f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
+        f"🔗 Telegram: <b>{tg_text}</b>\n"
+        f"🛡 Роль: <b>{role_text}</b>\n"
+        f"📦 Публикаций: <b>{posts_count}</b>"
+    )
+    await send_step(message_obj, text, build_staff_member_actions_kb(user_id, role), state=state)
+
+
 @dp.callback_query(F.data == "adm_staff_list")
 @dp.callback_query(F.data.startswith("adm_staff_page_"))
 async def adm_staff_list(c: types.CallbackQuery, state: FSMContext):
@@ -1607,28 +1632,7 @@ async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
     except ValueError:
         await c.answer("Некорректный ID", show_alert=True)
         return
-    with db_connect() as conn:
-        row = conn.execute(
-            "SELECT name, phone, tg_username, role FROM users WHERE id=? AND role IN ('staff','admin')",
-            (user_id,),
-        ).fetchone()
-    if not row:
-        await c.answer("Сотрудник не найден.", show_alert=True)
-        return
-    name, phone, tg, role = row
-    posts_count = count_user_posts(user_id)
-    tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
-    role_text = role_label_ru(role, user_id)
-    text = (
-        f"👤 <b>Карточка сотрудника</b>\n\n"
-        f"🆔 ID: <b>{user_id}</b>\n"
-        f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
-        f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
-        f"🔗 Telegram: <b>{tg_text}</b>\n"
-        f"🛡 Роль: <b>{role_text}</b>\n"
-        f"📦 Публикаций: <b>{posts_count}</b>"
-    )
-    await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
+    await _render_staff_card(c, user_id, state)
     await c.answer()
 
 
@@ -1694,7 +1698,8 @@ async def adm_staff_edit_save(m: types.Message, state: FSMContext):
         )
         conn.commit()
     await state.clear()
-    await send_step(m, "✅ Данные сотрудника обновлены.", build_staff_member_actions_kb(user_id, role), state=state)
+    await send_step(m, "✅ Данные сотрудника обновлены.", state=state)
+    await _render_staff_card(m, user_id, state)
 
 
 @dp.callback_query(F.data.startswith("adm_staff_role_"))
@@ -1719,28 +1724,7 @@ async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
         conn.execute("UPDATE users SET role=? WHERE id=?", (new_role, user_id))
         conn.commit()
     await c.answer(f"Роль обновлена: {new_role}")
-    with db_connect() as conn:
-        row = conn.execute(
-            "SELECT name, phone, tg_username, role FROM users WHERE id=? AND role IN ('staff','admin')",
-            (user_id,),
-        ).fetchone()
-    if not row:
-        await _render_staff_list(c, 0, state)
-        return
-    name, phone, tg, role = row
-    posts_count = count_user_posts(user_id)
-    tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
-    role_text = role_label_ru(role, user_id)
-    text = (
-        f"👤 <b>Карточка сотрудника</b>\n\n"
-        f"🆔 ID: <b>{user_id}</b>\n"
-        f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
-        f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
-        f"🔗 Telegram: <b>{tg_text}</b>\n"
-        f"🛡 Роль: <b>{role_text}</b>\n"
-        f"📦 Публикаций: <b>{posts_count}</b>"
-    )
-    await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
+    await _render_staff_card(c, user_id, state)
 
 
 @dp.callback_query(F.data.startswith("adm_staff_remove_"))
