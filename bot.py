@@ -295,6 +295,18 @@ def fetch_category_counts(city: Optional[str]) -> dict:
     counts["_total"] = sum(counts.values())
     return counts
 
+
+def fetch_city_counts() -> dict:
+    sql = """SELECT city, COUNT(*) as cnt
+             FROM posts
+             WHERE channel_message_id IS NOT NULL
+             GROUP BY city"""
+    with db_connect() as conn:
+        rows = conn.execute(sql).fetchall()
+    counts = {str(city): int(cnt) for city, cnt in rows if city is not None}
+    counts["_total"] = sum(counts.values())
+    return counts
+
 def is_allowed(u_id):
     if u_id == OWNER_ID:
         return True
@@ -767,10 +779,11 @@ def back_btn():
 
 
 def build_client_city_kb():
+    counts = fetch_city_counts()
     kb = InlineKeyboardBuilder()
-    kb.button(text="Любой город", callback_data="cl_ci_any")
+    kb.button(text=f"Любой город ({counts.get('_total', 0)})", callback_data="cl_ci_any")
     for i, city in enumerate(CITY_ORDER):
-        kb.button(text=city[:30], callback_data=f"cl_ci_{i}")
+        kb.button(text=f"{city} ({counts.get(city, 0)})"[:30], callback_data=f"cl_ci_{i}")
     kb.button(text="Назад", callback_data="cl_cancel")
     return kb.adjust(2).as_markup()
 
