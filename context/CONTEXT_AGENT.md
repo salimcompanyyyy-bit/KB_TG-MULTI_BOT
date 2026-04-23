@@ -26,6 +26,7 @@ Scope: internal working memory for this repository.
 - If user message looks like random Latin letters, interpret it as Russian typed with English keyboard layout and respond to converted meaning (ask briefly if ambiguous).
 - Project rule now requires semantic versioning in root `VERSION` (current baseline: `1.0.0`) and commit subject format `vX.Y.Z: ...`.
 - All clarifying questions to user must be asked via Ask Question only.
+- Version policy for this repository is fixed to `1.0.x` by default; increment PATCH only unless user explicitly approves MINOR/MAJOR bump.
 
 ## Known Pending Product Items (EN)
 
@@ -65,6 +66,7 @@ Scope: internal working memory for this repository.
 - Если сообщение похоже на случайный набор латиницы, трактовать его как русский текст в английской раскладке и отвечать по конвертированному смыслу (при сомнениях коротко уточнять).
 - Правило проекта теперь требует семантическую версию в корневом `VERSION` (текущая базовая: `1.0.0`) и формат заголовка коммита `vX.Y.Z: ...`.
 - Любые уточняющие вопросы пользователю задавать только через Ask Question.
+- Политика версий для этого репозитория по умолчанию фиксирована на `1.0.x`; повышать только PATCH, пока пользователь явно не согласует MINOR/MAJOR.
 
 ### Известные незавершенные пункты
 
