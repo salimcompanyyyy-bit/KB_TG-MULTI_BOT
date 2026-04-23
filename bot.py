@@ -1320,6 +1320,7 @@ async def handle_city(c: types.CallbackQuery, state: FSMContext):
             kb.button(text=district, callback_data=f"district_{district}")
     else:
         kb.button(text="Введите вручную", callback_data="district_manual")
+        kb.button(text="Пропустить", callback_data="skip_district")
     
     kb.button(text="⬅️ Назад", callback_data="back_to_city")
     if groups:
@@ -1353,6 +1354,7 @@ async def handle_district_group(c: types.CallbackQuery, state: FSMContext):
             kb.button(text=district, callback_data=f"district_{district}")
     else:
         kb.button(text="Введите вручную", callback_data="district_manual")
+        kb.button(text="Пропустить", callback_data="skip_district")
     kb.button(text="⬅️ Назад", callback_data="back_to_city_group")
     await send_step(
         c.message,
@@ -1363,7 +1365,22 @@ async def handle_district_group(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 # --- ОБРАБОТЧИКИ РАЙОНОВ ---
-@dp.callback_query(F.data.startswith("district_"))
+@dp.callback_query(F.data == "skip_district")
+async def district_skip_cb(c: types.CallbackQuery, state: FSMContext):
+    await state.update_data(district="—")
+    await state.set_state(PostState.street)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="street_skip")
+    kb.button(text="⬅️ Назад", callback_data="back_to_district")
+    await send_step(c.message, "Район пропущен.\nВведите улицу:", kb.adjust(2).as_markup(), state)
+    await c.answer()
+
+
+@dp.callback_query(
+    F.data.startswith("district_")
+    & ~F.data.startswith("district_group_")
+    & (F.data != "district_manual")
+)
 async def handle_district(c: types.CallbackQuery, state: FSMContext):
     district_key = c.data.replace("district_", "")
     
@@ -1380,8 +1397,9 @@ async def handle_district(c: types.CallbackQuery, state: FSMContext):
 async def district_manual(c: types.CallbackQuery, state: FSMContext):
     await state.set_state(PostState.district)
     kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="skip_district")
     kb.button(text="⬅️ Назад", callback_data="back_to_city")
-    await send_step(c.message, "Введите название района вручную:", kb.adjust(1).as_markup(), state)
+    await send_step(c.message, "Введите название района вручную:", kb.adjust(2).as_markup(), state)
     await c.answer()
 
 @dp.callback_query(F.data == "back_to_district")
@@ -1398,6 +1416,7 @@ async def back_to_district(c: types.CallbackQuery, state: FSMContext):
             kb.button(text=district, callback_data=f"district_{district}")
     else:
         kb.button(text="Введите вручную", callback_data="district_manual")
+        kb.button(text="Пропустить", callback_data="skip_district")
 
     if district_group:
         kb.button(text="⬅️ Назад", callback_data="back_to_city_group")
