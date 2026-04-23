@@ -130,6 +130,34 @@ def save_user_profile(user_id: int, name: str, phone: str) -> None:
         conn.commit()
 
 
+def save_user_name_only(user_id: int, name: str) -> None:
+    """Обновить только ФИО, сохранив телефон и Telegram."""
+    with db_connect() as conn:
+        row = conn.execute("SELECT phone, tg_username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        phone = (row[0] if row else None) or ""
+        tg = row[1] if row else None
+        role = (row[2] if row and row[2] else None) or "staff"
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, name, phone, role, tg_username) VALUES (?,?,?,?,?)",
+            (user_id, name, phone, role, tg),
+        )
+        conn.commit()
+
+
+def save_user_phone_only(user_id: int, phone: str) -> None:
+    """Обновить только телефон, сохранив имя и Telegram."""
+    with db_connect() as conn:
+        row = conn.execute("SELECT name, tg_username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        name = (row[0] if row else None) or "Сотрудник"
+        tg = row[1] if row else None
+        role = (row[2] if row and row[2] else None) or "staff"
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, name, phone, role, tg_username) VALUES (?,?,?,?,?)",
+            (user_id, name, phone, role, tg),
+        )
+        conn.commit()
+
+
 def set_user_telegram_username(user_id: int, username: Optional[str]) -> None:
     """username: строка без @ или None чтобы очистить поле."""
     with db_connect() as conn:
@@ -325,6 +353,12 @@ class ProfileState(StatesGroup):
 
 class ProfileTgState(StatesGroup):
     value = State()
+
+
+class ProfileEditState(StatesGroup):
+    """Пошаговое изменение одного поля из меню «Изменить данные»."""
+    name = State()
+    phone = State()
 
 
 class AdminState(StatesGroup):
@@ -861,24 +895,91 @@ async def profile_handler(m: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "edit_p")
 async def edit_profile_start(c: types.CallbackQuery, state: FSMContext):
     d = await state.get_data()
-    await state.update_data(profile_from_edit=True, app_mode=d.get("app_mode", "staff"))
-    await state.set_state(ProfileState.name)
+    await state.update_data(app_mode=d.get("app_mode", "staff"))
+    await state.set_state(None)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 ФИО", callback_data="edit_field_name")
+    kb.button(text="📞 Телефон", callback_data="edit_field_phone")
+    kb.button(text="🔗 Telegram", callback_data="profile_set_tg")
+    kb.button(text="⬅️ Отмена", callback_data="cancel_profile_edit")
+    await send_step(
+        c.message,
+        "<b>Изменить данные</b>\nВыберите, что правим:",
+        kb.adjust(2).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "edit_field_name")
+async def edit_field_name_start(c: types.CallbackQuery, state: FSMContext):
+    d = await state.get_data()
+    await state.update_data(app_mode=d.get("app_mode", "staff"))
+    await state.set_state(ProfileEditState.name)
     kb = InlineKeyboardBuilder()
     kb.button(text="⬅️ Отмена", callback_data="cancel_profile_edit")
     await send_step(
         c.message,
-        "📝 <b>Изменение профиля</b>\nВведите новое <b>имя и фамилию</b>:",
+        "Введите новое <b>имя и фамилию</b> (одной строкой):",
         kb.adjust(1).as_markup(),
         state,
     )
     await c.answer()
 
 
+@dp.callback_query(F.data == "edit_field_phone")
+async def edit_field_phone_start(c: types.CallbackQuery, state: FSMContext):
+    d = await state.get_data()
+    await state.update_data(app_mode=d.get("app_mode", "staff"))
+    await state.set_state(ProfileEditState.phone)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Отмена", callback_data="cancel_profile_edit")
+    await send_step(
+        c.message,
+        "Введите новый <b>номер телефона</b> (например +998901234567):",
+        kb.adjust(1).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.message(ProfileEditState.name)
+async def edit_field_name_save(m: types.Message, state: FSMContext):
+    name = (m.text or "").strip()
+    if len(name) < 2:
+        await send_step(m, "❌ Слишком коротко. Введите полное имя и фамилию:", state=state)
+        return
+    save_user_name_only(m.from_user.id, name)
+    mode = (await state.get_data()).get("app_mode", "staff")
+    await state.clear()
+    await state.update_data(app_mode=mode)
+    await send_step(m, "✅ ФИО обновлено.", state=state)
+    await send_profile_screen(m, m.from_user.id, state)
+
+
+@dp.message(ProfileEditState.phone)
+async def edit_field_phone_save(m: types.Message, state: FSMContext):
+    phone = (m.text or "").strip()
+    if not validate_phone(phone):
+        await send_step(
+            m,
+            "❌ Неверный формат. Введите номер в формате <code>+998XXXXXXXXX</code> (9–15 цифр).",
+            state=state,
+        )
+        return
+    save_user_phone_only(m.from_user.id, phone)
+    mode = (await state.get_data()).get("app_mode", "staff")
+    await state.clear()
+    await state.update_data(app_mode=mode)
+    await send_step(m, "✅ Телефон обновлён.", state=state)
+    await send_profile_screen(m, m.from_user.id, state)
+
+
 @dp.callback_query(F.data == "cancel_profile_edit")
 async def cancel_profile_edit(c: types.CallbackQuery, state: FSMContext):
     mode = (await state.get_data()).get("app_mode", "staff")
     await state.set_state(None)
-    await state.update_data(app_mode=mode, profile_from_edit=False)
+    await state.update_data(app_mode=mode)
     await send_profile_screen(c.message, c.from_user.id, state)
     await c.answer()
 
@@ -1751,15 +1852,19 @@ def build_card_text(
         card_text += f"{desc_text}\n\n"
     if price_text:
         card_text += f"{price_text}\n"
-    card_text += f"📞 Контакт: {emp}\n"
+    # Контакт в объявлении: две строки — 1) ФИО, 2) телефон и @username
+    card_text += f"{emp}\n"
+    line2: list[str] = []
     if contact_phone and str(contact_phone).strip():
-        card_text += f"☎️ Тел.: {html.escape(str(contact_phone).strip())}\n"
+        line2.append(html.escape(str(contact_phone).strip()))
     if contact_tg and str(contact_tg).strip():
         u = str(contact_tg).strip().lstrip("@")
         if TG_USERNAME_RE.match(u):
-            card_text += f'🔗 Telegram: <a href="https://t.me/{u}">@{html.escape(u)}</a>\n'
+            line2.append(f'<a href="https://t.me/{u}">@{html.escape(u)}</a>')
         else:
-            card_text += f"🔗 Telegram: @{html.escape(u)}\n"
+            line2.append(f"@{html.escape(u)}")
+    if line2:
+        card_text += " ".join(line2) + "\n"
     card_text += "━━━━━━━━━━━━━━━━━━━━"
     return card_text
 
@@ -2003,7 +2108,6 @@ async def process_phone(m: types.Message, state: FSMContext):
         return
     
     data = await state.get_data()
-    from_edit = data.get("profile_from_edit")
     prev_mode = data.get("app_mode", "staff")
     name = data["name"]
 
@@ -2012,10 +2116,7 @@ async def process_phone(m: types.Message, state: FSMContext):
     await state.clear()
     await state.update_data(app_mode=prev_mode)
 
-    if from_edit:
-        await send_step(m, "✅ Данные профиля обновлены.", state=state)
-        await send_profile_screen(m, m.from_user.id, state)
-    elif prev_mode == "client":
+    if prev_mode == "client":
         await send_step(m, "✅ Профиль успешно создан!", reply_markup=client_menu_kb(), state=state)
     else:
         await send_step(m, "✅ Профиль успешно создан!", reply_markup=main_menu_kb(m.from_user.id), state=state)
