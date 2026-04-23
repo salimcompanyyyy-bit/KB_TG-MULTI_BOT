@@ -7,7 +7,7 @@ import sqlite3
 import logging
 from typing import Optional
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import InputMediaPhoto, InputMediaVideo
+from aiogram.types import InputMediaPhoto, InputMediaVideo, LinkPreviewOptions
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -367,6 +367,11 @@ class AdminState(StatesGroup):
     add_id = State()
 
 
+class AdminDeletePostState(StatesGroup):
+    """Удаление объявления из БД (владелец)."""
+    wait_id = State()
+
+
 class SearchState(StatesGroup):
     """Пошаговый поиск для клиента (город → категория)."""
     pick_city = State()
@@ -512,6 +517,7 @@ def build_admin_service_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="⚠️ Тех. перерыв (рассылка)", callback_data="adm_maint")
     kb.button(text="🔎 Поиск публикаций", callback_data="adm_search_posts")
+    kb.button(text="🗑 Удалить объявление (БД)", callback_data="adm_delete_post")
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
     return kb.adjust(1).as_markup()
 
@@ -855,6 +861,7 @@ async def adm_menu_data(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_menu_service")
 async def adm_menu_service(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(None)
     await send_step(c, "⚙️ <b>Раздел: Служебное</b>", build_admin_service_kb(), state=state)
     await c.answer()
 
@@ -1220,6 +1227,67 @@ async def adm_staff_list(c: types.CallbackQuery):
 @dp.callback_query(F.data == "adm_search_posts")
 async def adm_search_posts(c: types.CallbackQuery):
     await c.answer("Поиск публикаций: функция в разработке", show_alert=True)
+
+
+@dp.callback_query(F.data == "adm_delete_post")
+async def adm_delete_post_start(c: types.CallbackQuery, state: FSMContext):
+    if c.from_user.id != OWNER_ID:
+        await c.answer("Доступно только владельцу бота.", show_alert=True)
+        return
+    await state.set_state(AdminDeletePostState.wait_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="adm_menu_service")
+    await send_step(
+        c.message,
+        "Введите <b>номер объявления</b> (№ на карточке в канале = id в таблице <code>posts</code>).\n\n"
+        "Удалится запись в базе. Если пост в канале ещё есть и у бота есть право удалять сообщения — бот попробует удалить его "
+        "(альбом из нескольких фото может удалиться не полностью — это ограничение Telegram).",
+        kb.adjust(1).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.message(AdminDeletePostState.wait_id)
+async def adm_delete_post_do(m: types.Message, state: FSMContext):
+    if m.from_user.id != OWNER_ID:
+        await state.clear()
+        await state.update_data(app_mode="staff")
+        await m.answer("Нет доступа.")
+        return
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await send_step(m, "❌ Введите целое число — номер объявления.", state=state)
+        return
+    post_id = int(raw)
+    with db_connect() as conn:
+        row = conn.execute("SELECT channel_message_id FROM posts WHERE id=?", (post_id,)).fetchone()
+    if not row:
+        await send_step(m, f"❌ Объявление №{post_id} в базе не найдено.", state=state)
+        return
+    ch_mid = row[0]
+    deleted_in_channel = False
+    if ch_mid:
+        try:
+            await bot.delete_message(CHANNEL_ID, ch_mid)
+            deleted_in_channel = True
+        except Exception as e:
+            logging.warning("adm_delete_post delete_message: %s", e)
+    with db_connect() as conn:
+        conn.execute("DELETE FROM posts WHERE id=?", (post_id,))
+        conn.commit()
+    await state.clear()
+    await state.update_data(app_mode="staff")
+    tail = " Сообщение в канале удалено." if deleted_in_channel else (
+        " Сообщение в канале не удалось удалить (уже удалено вручную или нет прав) — запись из базы всё равно убрана."
+        if ch_mid else ""
+    )
+    await send_step(
+        m,
+        f"✅ Объявление №{post_id} удалено из базы.{tail}",
+        reply_markup=main_menu_kb(m.from_user.id),
+        state=state,
+    )
 
 # --- СОЗДАНИЕ КАРТОЧКИ ---
 @dp.message(F.text == "➕ Создать карточку объекта")
@@ -1884,10 +1952,8 @@ def build_card_text(
         line2.append(html.escape(str(contact_phone).strip()))
     if contact_tg and str(contact_tg).strip():
         u = str(contact_tg).strip().lstrip("@")
-        if TG_USERNAME_RE.match(u):
-            line2.append(f'<a href="https://t.me/{u}">@{html.escape(u)}</a>')
-        else:
-            line2.append(f"@{html.escape(u)}")
+        # <code> без ссылки на t.me — иначе в канале появляется большая превью-плашка профиля
+        line2.append(f"<code>@{html.escape(u)}</code>")
     if line2:
         card_text += " ".join(line2) + "\n"
     card_text += dbl.rstrip("\n")
@@ -1995,7 +2061,12 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
                 sent = await bot.send_media_group(CHANNEL_ID, media_group)
                 sent_msg = sent[0] if sent else None
         else:
-            sent_msg = await bot.send_message(CHANNEL_ID, card_text, parse_mode="HTML")
+            sent_msg = await bot.send_message(
+                CHANNEL_ID,
+                card_text,
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
         ch_mid = sent_msg.message_id if sent_msg else None
         update_post_channel_message_id(post_id, ch_mid)
         # Логируем публикацию
