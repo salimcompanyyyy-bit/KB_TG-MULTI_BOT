@@ -1007,8 +1007,8 @@ async def profile_set_tg_start(c: types.CallbackQuery, state: FSMContext):
     await send_step(
         c.message,
         "Введите ваш <b>Telegram</b>:\n"
-        "• username, например <code>@Azizbek_3393</code>\n"
-        "• или ссылку <code>https://t.me/Azizbek_3393</code>\n\n"
+        "• username, например <code>@my_username</code>\n"
+        "• или ссылку <code>https://t.me/my_username</code>\n\n"
         "Чтобы убрать username из профиля, отправьте: <code>-</code>",
         kb.adjust(1).as_markup(),
         state,
