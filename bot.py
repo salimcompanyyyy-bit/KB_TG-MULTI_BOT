@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import html
 import json
 import sqlite3
 import logging
@@ -746,14 +747,61 @@ async def profile_handler(m: types.Message, state: FSMContext):
         p = conn.execute("SELECT name, phone FROM users WHERE id=?", (m.from_user.id,)).fetchone()
     
     if p and p[0]:
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📝 Изменить данные", callback_data="edit_p")
-        kb.button(text="📋 Мои публикации", callback_data="my_posts")
-        kb.button(text="⬅️ Назад", callback_data="go_back")
-        await send_step(m, f"👤 <b>Профиль:</b> {p[0]}\n📞 <b>Тел:</b> {p[1]}", kb.adjust(2).as_markup(), state)
+        await send_step(
+            m,
+            f"👤 <b>Профиль:</b> {html.escape(p[0])}\n📞 <b>Тел:</b> {html.escape(p[1] or '')}",
+            _profile_inline_kb(),
+            state,
+        )
     else:
         await send_step(m, "Введите ваше Имя и Фамилию:", state=state)
         await state.set_state(ProfileState.name)
+
+
+def _profile_inline_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Изменить данные", callback_data="edit_p")
+    kb.button(text="📋 Мои публикации", callback_data="my_posts")
+    kb.button(text="⬅️ Назад", callback_data="go_back")
+    return kb.adjust(2).as_markup()
+
+
+@dp.callback_query(F.data == "edit_p")
+async def edit_profile_start(c: types.CallbackQuery, state: FSMContext):
+    d = await state.get_data()
+    await state.update_data(profile_from_edit=True, app_mode=d.get("app_mode", "staff"))
+    await state.set_state(ProfileState.name)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Отмена", callback_data="cancel_profile_edit")
+    await send_step(
+        c.message,
+        "📝 <b>Изменение профиля</b>\nВведите новое <b>имя и фамилию</b>:",
+        kb.adjust(1).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "cancel_profile_edit")
+async def cancel_profile_edit(c: types.CallbackQuery, state: FSMContext):
+    mode = (await state.get_data()).get("app_mode", "staff")
+    await state.set_state(None)
+    await state.update_data(app_mode=mode, profile_from_edit=False)
+    uid = c.from_user.id
+    with db_connect() as conn:
+        p = conn.execute("SELECT name, phone FROM users WHERE id=?", (uid,)).fetchone()
+    if p and p[0]:
+        await send_step(
+            c.message,
+            f"👤 <b>Профиль:</b> {html.escape(p[0])}\n📞 <b>Тел:</b> {html.escape(p[1] or '')}",
+            _profile_inline_kb(),
+            state,
+        )
+    else:
+        await send_step(c.message, "Профиль не заполнен. Введите имя и фамилию:", state=state)
+        await state.set_state(ProfileState.name)
+    await c.answer()
+
 
 # --- ЛОГИКА АДМИНКИ ---
 @dp.callback_query(F.data == "adm_maint")
@@ -818,29 +866,45 @@ async def back_to_admin(c: types.CallbackQuery, state: FSMContext):
 # --- ОБРАБОТЧИКИ НОВЫХ ФУНКЦИЙ ---
 @dp.callback_query(F.data == "my_posts")
 async def my_posts(c: types.CallbackQuery):
+    uid = c.from_user.id
     with db_connect() as conn:
-        # Получаем последние 10 публикаций сотрудника
-        posts = conn.execute("""
-            SELECT s.date, u.name 
-            FROM stats s 
-            JOIN users u ON s.user_id = u.id 
-            WHERE s.user_id = ? 
-            ORDER BY s.date DESC 
-            LIMIT 10
-        """, (c.from_user.id,)).fetchall()
-    
-    if not posts:
-        await send_step(c, "📋 Ваши публикации:\n\n❌ Нет данных", state=None)
-        return
-    
-    # Формируем сообщение с публикациями
-    posts_text = "📋 Ваши последние публикации:\n\n"
-    for i, (date, name) in enumerate(posts, 1):
-        posts_text += f"{i}. {name} - {date}\n"
-    
+        rows = conn.execute(
+            """SELECT id, category, realty_type, city, district, price_val, price_cur,
+                      channel_message_id, published_date
+               FROM posts
+               WHERE user_id = ? AND channel_message_id IS NOT NULL
+               ORDER BY published_date DESC
+               LIMIT 10""",
+            (uid,),
+        ).fetchall()
+
     kb = InlineKeyboardBuilder()
+    if not rows:
+        kb.button(text="⬅️ Назад", callback_data="go_back")
+        await send_step(
+            c.message,
+            "📋 <b>Ваши объявления в канале</b>\n\n"
+            "Пока нет карточек, сохранённых при публикации (с привязкой к посту в канале).",
+            kb.adjust(1).as_markup(),
+            state=None,
+        )
+        await c.answer()
+        return
+
+    lines = ["📋 <b>Ваши последние объявления</b> (номер = № в базе и в тексте поста)\n"]
+    for row in rows:
+        pid, cat, rtype, city, district, pval, pcur, ch_mid, pdate = row
+        price_h = _format_price_row(pval, pcur)
+        lines.append(
+            f"• <b>№{pid}</b> {html.escape(cat or '')} / {html.escape(rtype or '')}\n"
+            f"  📍 {html.escape(city or '')}, {html.escape(district or '—')}\n"
+            f"  💰 {html.escape(price_h)}\n"
+        )
+        url = channel_post_url(ch_mid)
+        if url:
+            kb.button(text=f"Открыть №{pid}", url=url)
     kb.button(text="⬅️ Назад", callback_data="go_back")
-    await send_step(c.message, posts_text, kb.adjust(1).as_markup(), state=None)
+    await send_step(c.message, "\n".join(lines), kb.adjust(1).as_markup(), state=None)
     await c.answer()
 
 @dp.callback_query(F.data == "adm_logs")
@@ -1470,19 +1534,21 @@ async def back_to_media_choice(c: types.CallbackQuery, state: FSMContext):
 
 
 def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = None) -> str:
-    """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts)."""
-    category = data.get('category', '')
-    realty_type = data.get('realty_type', '')
-    city = data.get('city', '')
-    district = data.get('district', '')
-    street = data.get('street', '')
-    house = data.get('house', '')
+    """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts).
+    Поля экранируются под parse_mode=HTML в Telegram."""
+    category = html.escape(str(data.get('category') or ''))
+    realty_type = html.escape(str(data.get('realty_type') or ''))
+    city = html.escape(str(data.get('city') or ''))
+    district = html.escape(str(data.get('district') or ''))
+    street = html.escape(str(data.get('street') or ''))
+    house = html.escape(str(data.get('house') or ''))
     total_area = data.get('total_area', '')
     useful_area = data.get('useful_area', '')
-    rooms = data.get('rooms', '')
-    desc = data.get('desc', '')
+    rooms = html.escape(str(data.get('rooms') or ''))
+    desc = html.escape(str(data.get('desc') or ''))
     price_val = data.get('price_val', '')
-    price_cur = data.get('price_cur', '')
+    price_cur = html.escape(str(data.get('price_cur') or ''))
+    emp = html.escape(str(employee_name or ''))
 
     area_text = ""
     if total_area:
@@ -1497,7 +1563,7 @@ def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = 
 
     card_text = "━━━━━━━━━━━━━━━━━━━━\n"
     if listing_no is not None:
-        card_text += f"🔢 Объявление №{listing_no}\n\n"
+        card_text += f"🔢 <b>Объявление №{listing_no}</b>\n\n"
     card_text += f"🏠 {category}\n\n"
     card_text += f"🏙 Город: {city}\n"
     card_text += f"📍 Район: {district}\n"
@@ -1513,7 +1579,7 @@ def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = 
         card_text += f"{desc_text}\n\n"
     if price_text:
         card_text += f"{price_text}\n"
-    card_text += f"📞 Контакт: {employee_name}\n"
+    card_text += f"📞 Контакт: {emp}\n"
     card_text += "━━━━━━━━━━━━━━━━━━━━"
     return card_text
 
@@ -1733,17 +1799,35 @@ async def process_phone(m: types.Message, state: FSMContext):
         await send_step(m, "❌ Неверный формат телефона. Введите номер в формате +998XXXXXXXXX:", state=state)
         return
     
+    data = await state.get_data()
+    from_edit = data.get("profile_from_edit")
+    prev_mode = data.get("app_mode", "staff")
+    name = data["name"]
+
     with db_connect() as conn:
-        conn.execute("INSERT OR REPLACE INTO users (id, name, phone) VALUES (?, ?, ?)", 
-                    (m.from_user.id, (await state.get_data())['name'], phone))
-    
-    prev_mode = (await state.get_data()).get("app_mode", "staff")
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, name, phone) VALUES (?, ?, ?)",
+            (m.from_user.id, name, phone),
+        )
+        conn.commit()
+
     await state.clear()
-    if prev_mode == "client":
-        await state.update_data(app_mode="client")
+    await state.update_data(app_mode=prev_mode)
+
+    if from_edit:
+        with db_connect() as conn:
+            p = conn.execute("SELECT name, phone FROM users WHERE id=?", (m.from_user.id,)).fetchone()
+        nm = html.escape(p[0]) if p and p[0] else ""
+        ph = html.escape(p[1] or "") if p else ""
+        await send_step(
+            m,
+            f"✅ Данные профиля обновлены.\n\n👤 <b>Профиль:</b> {nm}\n📞 <b>Тел:</b> {ph}",
+            _profile_inline_kb(),
+            state=state,
+        )
+    elif prev_mode == "client":
         await send_step(m, "✅ Профиль успешно создан!", reply_markup=client_menu_kb(), state=state)
     else:
-        await state.update_data(app_mode="staff")
         await send_step(m, "✅ Профиль успешно создан!", reply_markup=main_menu_kb(m.from_user.id), state=state)
 
 async def main():
