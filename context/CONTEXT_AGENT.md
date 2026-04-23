@@ -36,8 +36,8 @@ Scope: internal working memory for this repository.
 
 - Client entry strategy is fixed: no Mini App, continue with current bot DM search flow.
 - Optional LK improvements: monthly publication counter, drafts.
-- Admin placeholders still pending:
-  - (none in current admin reports/search block)
+- Admin next item:
+  - Full admin delete flow for listing: remove from channel + delete all related DB/search traces.
 
 ---
 
@@ -82,8 +82,8 @@ Allowed commit types (and only these): `добавление`, `исправле
 
 - Стратегия клиентского входа зафиксирована: без Mini App, развиваем текущий поиск через личку бота.
 - Опциональные улучшения ЛК: счетчик публикаций за месяц и черновики.
-- В админке остаются заглушки:
-  - (в блоке отчетов/поиска заглушек больше нет)
+- Следующая задача админки:
+  - Полное удаление объявления из админки: удалять из канала и убирать все связанные следы в БД/поиске.
 
 ### Словарь типов коммитов
 
