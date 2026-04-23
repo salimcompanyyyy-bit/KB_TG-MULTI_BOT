@@ -278,6 +278,23 @@ def fetch_posts_filtered(city: Optional[str], category: Optional[str], realty_ty
     with db_connect() as conn:
         return conn.execute(sql, params).fetchall()
 
+
+def fetch_category_counts(city: Optional[str]) -> dict:
+    where = ["channel_message_id IS NOT NULL"]
+    params = []
+    if city:
+        where.append("city = ?")
+        params.append(city)
+    sql = f"""SELECT category, COUNT(*) as cnt
+              FROM posts
+              WHERE {' AND '.join(where)}
+              GROUP BY category"""
+    with db_connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    counts = {str(cat): int(cnt) for cat, cnt in rows if cat is not None}
+    counts["_total"] = sum(counts.values())
+    return counts
+
 def is_allowed(u_id):
     if u_id == OWNER_ID:
         return True
@@ -758,11 +775,12 @@ def build_client_city_kb():
     return kb.adjust(2).as_markup()
 
 
-def build_client_category_kb():
+def build_client_category_kb(city: Optional[str] = None):
+    counts = fetch_category_counts(city)
     kb = InlineKeyboardBuilder()
-    kb.button(text="Любая категория", callback_data="cl_ca_any")
+    kb.button(text=f"Любая категория ({counts.get('_total', 0)})", callback_data="cl_ca_any")
     for i, cat in enumerate(SEARCH_CATEGORIES):
-        kb.button(text=cat, callback_data=f"cl_ca_{i}")
+        kb.button(text=f"{cat} ({counts.get(cat, 0)})", callback_data=f"cl_ca_{i}")
     kb.button(text="Назад", callback_data="cl_cancel")
     return kb.adjust(2).as_markup()
 
@@ -1174,7 +1192,7 @@ async def client_search_after_city(c: types.CallbackQuery, state: FSMContext):
     await send_step(
         c.message,
         f"🏷 <b>Шаг 2 из 2 — категория</b>\nГород: <b>{city_label}</b>",
-        build_client_category_kb(),
+        build_client_category_kb(city),
         state,
     )
     await c.answer()
