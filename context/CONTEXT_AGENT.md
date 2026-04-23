@@ -22,6 +22,8 @@ Scope: internal working memory for this repository.
 - Auto-commit substantial completed changes; push only when user explicitly asks.
 - Keep user-facing communication concise and in Russian.
 - If user message looks like random Latin letters, interpret it as Russian typed with English keyboard layout and respond to converted meaning (ask briefly if ambiguous).
+- Project rule now requires semantic versioning in root `VERSION` (current baseline: `1.0.0`) and commit subject format `vX.Y.Z: ...`.
+- All clarifying questions to user must be asked via Ask Question only.
 
 ## Known Pending Product Items (EN)
 
@@ -59,6 +61,8 @@ Scope: internal working memory for this repository.
 - Существенные завершенные изменения коммитить автоматически; push делать только по явной просьбе пользователя.
 - Писать пользователю кратко и на русском.
 - Если сообщение похоже на случайный набор латиницы, трактовать его как русский текст в английской раскладке и отвечать по конвертированному смыслу (при сомнениях коротко уточнять).
+- Правило проекта теперь требует семантическую версию в корневом `VERSION` (текущая базовая: `1.0.0`) и формат заголовка коммита `vX.Y.Z: ...`.
+- Любые уточняющие вопросы пользователю задавать только через Ask Question.
 
 ### Известные незавершенные пункты
 
