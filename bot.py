@@ -672,7 +672,9 @@ def build_staff_member_actions_kb(user_id: int, role: str):
     return kb.adjust(1).as_markup()
 
 
-def role_label_ru(role: str) -> str:
+def role_label_ru(role: str, user_id: Optional[int] = None) -> str:
+    if user_id == OWNER_ID:
+        return "Хозяин"
     role_norm = (role or "").strip().lower()
     if role_norm == "admin":
         return "Администратор"
@@ -1616,7 +1618,7 @@ async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
     name, phone, tg, role = row
     posts_count = count_user_posts(user_id)
     tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
-    role_text = role_label_ru(role)
+    role_text = role_label_ru(role, user_id)
     text = (
         f"👤 <b>Карточка сотрудника</b>\n\n"
         f"🆔 ID: <b>{user_id}</b>\n"
@@ -1728,7 +1730,7 @@ async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
     name, phone, tg, role = row
     posts_count = count_user_posts(user_id)
     tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
-    role_text = role_label_ru(role)
+    role_text = role_label_ru(role, user_id)
     text = (
         f"👤 <b>Карточка сотрудника</b>\n\n"
         f"🆔 ID: <b>{user_id}</b>\n"
