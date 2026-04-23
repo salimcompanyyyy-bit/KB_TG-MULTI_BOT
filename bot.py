@@ -1,13 +1,15 @@
 import asyncio
 import csv
+import io
 import html
 import json
 import re
 import sqlite3
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import InputMediaPhoto, InputMediaVideo, LinkPreviewOptions
+from aiogram.types import InputMediaPhoto, InputMediaVideo, LinkPreviewOptions, BufferedInputFile
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -375,6 +377,188 @@ def staff_overview_counts():
         pending_cnt = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0
     return int(staff_cnt), int(admin_cnt), int(pending_cnt)
 
+
+def add_log(user_id: int, action: str, details: str) -> None:
+    with db_connect() as conn:
+        conn.execute(
+            "INSERT INTO logs (user_id, action, details) VALUES (?, ?, ?)",
+            (user_id, action, details),
+        )
+        conn.commit()
+
+
+def build_admin_search_posts_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔢 По № объявления", callback_data="adm_search_post_id")
+    kb.button(text="👤 По ID сотрудника", callback_data="adm_search_staff_id")
+    kb.button(text="⬅️ Назад", callback_data="adm_menu_service")
+    return kb.adjust(1).as_markup()
+
+
+def build_admin_logs_filters_kb(filters: dict):
+    mode = filters.get("mode", "all")
+    days = int(filters.get("days", 7))
+    uid = filters.get("user_id")
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"{'✅ ' if mode=='all' else ''}Все события", callback_data="adm_logs_mode_all")
+    kb.button(text=f"{'✅ ' if mode=='bot' else ''}Действия бота", callback_data="adm_logs_mode_bot")
+    kb.button(text=f"{'✅ ' if mode=='admin' else ''}Админ-действия", callback_data="adm_logs_mode_admin")
+    kb.button(text=f"{'✅ ' if mode=='errors' else ''}Только ошибки", callback_data="adm_logs_mode_errors")
+    kb.button(text=f"{'✅ ' if days==1 else ''}За 1 день", callback_data="adm_logs_days_1")
+    kb.button(text=f"{'✅ ' if days==7 else ''}За 7 дней", callback_data="adm_logs_days_7")
+    kb.button(text=f"{'✅ ' if days==30 else ''}За 30 дней", callback_data="adm_logs_days_30")
+    kb.button(text=f"{'✅ ' if days==0 else ''}За все время", callback_data="adm_logs_days_0")
+    kb.button(text=f"🆔 user_id: {uid if uid else 'любой'}", callback_data="adm_logs_set_uid")
+    kb.button(text="♻️ Сбросить фильтры", callback_data="adm_logs_reset")
+    kb.button(text="📤 Экспорт CSV", callback_data="export_logs_csv")
+    kb.button(text="📗 Экспорт Excel", callback_data="export_logs_xlsx")
+    kb.button(text="⬅️ Назад", callback_data="adm_menu_logs")
+    return kb.adjust(1).as_markup()
+
+
+def _logs_where_from_filters(filters: dict):
+    where = ["1=1"]
+    params = []
+    mode = filters.get("mode", "all")
+    if mode == "errors":
+        where.append("(action LIKE ? OR details LIKE ?)")
+        params.extend(["%Ошибка%", "%Ошибка%"])
+    elif mode == "admin":
+        where.append("(action LIKE ? OR action LIKE ? OR action LIKE ? OR action LIKE ? OR action LIKE ?)")
+        params.extend(["%админ%", "%заявк%", "%роль%", "%сотрудник%", "%удален%"])
+    elif mode == "bot":
+        where.append("1=1")
+    days = int(filters.get("days", 7))
+    if days > 0:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        where.append("timestamp >= ?")
+        params.append(since)
+    uid = filters.get("user_id")
+    if uid:
+        where.append("user_id = ?")
+        params.append(int(uid))
+    return where, params
+
+
+def fetch_logs_filtered(filters: dict, limit: int = 20):
+    where, params = _logs_where_from_filters(filters)
+    sql = f"""SELECT id, user_id, action, details, timestamp
+              FROM logs
+              WHERE {' AND '.join(where)}
+              ORDER BY id DESC
+              LIMIT ?"""
+    params.append(limit)
+    with db_connect() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def fetch_logs_for_export(filters: dict, limit: int = 5000):
+    where, params = _logs_where_from_filters(filters)
+    sql = f"""SELECT id, user_id, action, details, timestamp
+              FROM logs
+              WHERE {' AND '.join(where)}
+              ORDER BY id DESC
+              LIMIT ?"""
+    params.append(limit)
+    with db_connect() as conn:
+        return conn.execute(sql, params).fetchall()
+
+
+def build_stats_text() -> str:
+    now = datetime.now()
+    d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    d30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    with db_connect() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL").fetchone()[0] or 0
+        c1 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d1,)).fetchone()[0] or 0
+        c7 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d7,)).fetchone()[0] or 0
+        c30 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d30,)).fetchone()[0] or 0
+        pending = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0
+        top = conn.execute(
+            """SELECT p.user_id, COALESCE(u.name, 'Сотрудник'), COUNT(*) AS cnt
+               FROM posts p
+               LEFT JOIN users u ON u.id = p.user_id
+               WHERE p.channel_message_id IS NOT NULL
+               GROUP BY p.user_id
+               ORDER BY cnt DESC
+               LIMIT 5"""
+        ).fetchall()
+    lines = [
+        "📊 <b>Статистика</b>",
+        f"• Всего публикаций: <b>{int(total)}</b>",
+        f"• За сегодня: <b>{int(c1)}</b>",
+        f"• За 7 дней: <b>{int(c7)}</b>",
+        f"• За 30 дней: <b>{int(c30)}</b>",
+        f"• Заявки доступа (pending): <b>{int(pending)}</b>",
+        "",
+        "🏆 <b>Топ сотрудников:</b>",
+    ]
+    if top:
+        for idx, (uid, name, cnt) in enumerate(top, start=1):
+            lines.append(f"{idx}. {html.escape(str(name))} (ID {uid}) — {int(cnt)}")
+    else:
+        lines.append("— данных пока нет")
+    return "\n".join(lines)
+
+
+def build_stats_export_rows():
+    now = datetime.now()
+    d1 = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+    d30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    with db_connect() as conn:
+        total = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL").fetchone()[0] or 0)
+        c1 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d1,)).fetchone()[0] or 0)
+        c7 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d7,)).fetchone()[0] or 0)
+        c30 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d30,)).fetchone()[0] or 0)
+        pending = int(conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0)
+        top = conn.execute(
+            """SELECT p.user_id, COALESCE(u.name, 'Сотрудник'), COUNT(*) AS cnt
+               FROM posts p
+               LEFT JOIN users u ON u.id = p.user_id
+               WHERE p.channel_message_id IS NOT NULL
+               GROUP BY p.user_id
+               ORDER BY cnt DESC
+               LIMIT 20"""
+        ).fetchall()
+    head = [
+        ["метрика", "значение"],
+        ["всего_публикаций", total],
+        ["публикаций_сегодня", c1],
+        ["публикаций_7д", c7],
+        ["публикаций_30д", c30],
+        ["pending_заявок", pending],
+        [],
+        ["top_user_id", "top_name", "top_posts"],
+    ]
+    for uid, name, cnt in top:
+        head.append([uid, name, int(cnt)])
+    return head
+
+
+def csv_bytes_from_rows(rows) -> bytes:
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    for r in rows:
+        writer.writerow(r)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def xlsx_bytes_from_rows(rows) -> bytes:
+    try:
+        from openpyxl import Workbook
+    except Exception:
+        return b""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "export"
+    for row in rows:
+        ws.append(row)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
 init_db()
 
 # --- СПИСКИ ГОРОДОВ ---
@@ -504,6 +688,15 @@ class AdminStaffEditState(StatesGroup):
     value = State()
 
 
+class AdminLogsState(StatesGroup):
+    wait_user_id = State()
+
+
+class AdminSearchPostsState(StatesGroup):
+    wait_post_id = State()
+    wait_staff_id = State()
+
+
 class SearchState(StatesGroup):
     """Пошаговый поиск для клиента (город → категория)."""
     pick_city = State()
@@ -615,7 +808,8 @@ def build_admin_panel_kb():
 def build_admin_stats_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="📊 Статистика", callback_data="adm_stats")
-    kb.button(text="📤 Экспорт stats", callback_data="export_stats")
+    kb.button(text="📤 Экспорт stats CSV", callback_data="export_stats")
+    kb.button(text="📗 Экспорт stats Excel", callback_data="export_stats_xlsx")
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
     return kb.adjust(1).as_markup()
 
@@ -623,7 +817,8 @@ def build_admin_stats_kb():
 def build_admin_logs_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 Логи", callback_data="adm_logs")
-    kb.button(text="📤 Экспорт logs", callback_data="export_logs")
+    kb.button(text="📤 Экспорт logs CSV", callback_data="export_logs")
+    kb.button(text="📗 Экспорт logs Excel", callback_data="export_logs_xlsx")
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
     return kb.adjust(1).as_markup()
 
@@ -1466,6 +1661,7 @@ async def adm_add_process(m: types.Message, state: FSMContext):
                 (user_id, "Новый сотрудник", "", "staff", None),
             )
             conn.commit()
+        add_log(m.from_user.id, "Админ: добавление сотрудника", f"Добавлен сотрудник ID {user_id}")
 
         await state.clear()
         await state.update_data(app_mode="staff")
@@ -1475,9 +1671,11 @@ async def adm_add_process(m: types.Message, state: FSMContext):
         await send_step(m, "❌ Неверный формат ID. Введите число.", state=state)
 
 @dp.callback_query(F.data == "adm_stats")
-async def adm_stats(c: types.CallbackQuery):
-    # Статистика временно скрыта
-    await send_step(c, "📊 Статистика публикаций:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
+async def adm_stats(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await send_step(c, build_stats_text(), build_admin_stats_kb(), state=state)
     await c.answer()
 
 @dp.callback_query(F.data == "back_to_admin")
@@ -1532,21 +1730,47 @@ async def my_posts(c: types.CallbackQuery):
     await c.answer()
 
 @dp.callback_query(F.data == "adm_logs")
-async def adm_logs(c: types.CallbackQuery):
-    # Логи временно скрыты
-    await send_step(c, "📋 Логи действий:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
+async def adm_logs(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    filters = (await state.get_data()).get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    await state.update_data(adm_logs_filters=filters)
+    rows = fetch_logs_filtered(filters, limit=20)
+    lines = ["📋 <b>Логи</b> (последние 20)\n"]
+    if rows:
+        for rid, uid, action, details, ts in rows:
+            lines.append(
+                f"• #{rid} | {ts}\n"
+                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(str(details or ''))}\n"
+            )
+    else:
+        lines.append("Логи по текущим фильтрам не найдены.")
+    await send_step(c, "\n".join(lines), build_admin_logs_filters_kb(filters), state=state)
     await c.answer()
 
 @dp.callback_query(F.data == "export_stats")
 async def export_stats(c: types.CallbackQuery):
-    # Экспорт статистики временно скрыт
-    await send_step(c, "📊 Экспорт статистики в Excel:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    data = csv_bytes_from_rows(build_stats_export_rows())
+    file = BufferedInputFile(data, filename=f"stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    await c.message.answer_document(file, caption="📤 Экспорт статистики (CSV)")
     await c.answer()
 
 @dp.callback_query(F.data == "export_logs")
-async def export_logs(c: types.CallbackQuery):
-    # Экспорт логов временно скрыт
-    await send_step(c, "📊 Экспорт логов в Excel:\n\n⚠️ Функция в разработке. Доступна позже.", state=None)
+async def export_logs(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    filters = (await state.get_data()).get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    export_rows = [["id", "user_id", "action", "details", "timestamp"]]
+    export_rows.extend(fetch_logs_for_export(filters, limit=5000))
+    data = csv_bytes_from_rows(export_rows)
+    file = BufferedInputFile(data, filename=f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    await c.message.answer_document(file, caption="📤 Экспорт логов (CSV)")
     await c.answer()
 
 
@@ -1697,6 +1921,7 @@ async def adm_staff_edit_save(m: types.Message, state: FSMContext):
             (name, phone, tg, role, user_id),
         )
         conn.commit()
+    add_log(m.from_user.id, "Админ: правка сотрудника", f"user_id={user_id}, field={field}")
     await state.clear()
     await send_step(m, "✅ Данные сотрудника обновлены.", state=state)
     await _render_staff_card(m, user_id, state)
@@ -1723,6 +1948,7 @@ async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
     with db_connect() as conn:
         conn.execute("UPDATE users SET role=? WHERE id=?", (new_role, user_id))
         conn.commit()
+    add_log(c.from_user.id, "Админ: смена роли", f"user_id={user_id}, role={new_role}")
     await c.answer(f"Роль обновлена: {new_role}")
     await _render_staff_card(c, user_id, state)
 
@@ -1743,6 +1969,7 @@ async def adm_staff_remove(c: types.CallbackQuery, state: FSMContext):
     with db_connect() as conn:
         conn.execute("UPDATE users SET role='client' WHERE id=?", (user_id,))
         conn.commit()
+    add_log(c.from_user.id, "Админ: снятие доступа", f"user_id={user_id}")
     await send_step(c, "✅ Доступ сотрудника снят.", state=state)
     await _render_staff_list(c, 0, state)
     await c.answer()
@@ -1843,6 +2070,7 @@ async def adm_request_set_priority(c: types.CallbackQuery, state: FSMContext):
         f"⭐ Приоритет: <b>{'Да' if int(priority or 0) > 0 else 'Нет'}</b>"
     )
     await send_step(c, text, build_access_request_actions_kb(req_id, int(priority or 0) > 0), state=state)
+    add_log(c.from_user.id, "Админ: приоритет заявки", f"req_id={req_id}, priority={value}")
     await c.answer("Приоритет обновлен")
 
 
@@ -1877,6 +2105,7 @@ async def adm_request_approve(c: types.CallbackQuery, state: FSMContext):
             (c.from_user.id, req_id),
         )
         conn.commit()
+    add_log(c.from_user.id, "Админ: заявка одобрена", f"req_id={req_id}, user_id={user_id}")
     try:
         await bot.send_message(user_id, "✅ Ваша заявка одобрена. Теперь вам доступен режим «Сотрудник».")
     except Exception as e:
@@ -1901,6 +2130,7 @@ async def adm_request_reject(c: types.CallbackQuery, state: FSMContext):
             (c.from_user.id, req_id),
         )
         conn.commit()
+    add_log(c.from_user.id, "Админ: заявка отклонена", f"req_id={req_id}, user_id={user_id}")
     try:
         await bot.send_message(user_id, "❌ Ваша заявка на доступ сотрудника отклонена.")
     except Exception as e:
@@ -1909,9 +2139,241 @@ async def adm_request_reject(c: types.CallbackQuery, state: FSMContext):
     await _render_pending_requests(c, 0, state)
 
 
+@dp.callback_query(F.data == "export_stats_xlsx")
+async def export_stats_xlsx(c: types.CallbackQuery):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    data = xlsx_bytes_from_rows(build_stats_export_rows())
+    if not data:
+        await c.answer("Excel недоступен: установите openpyxl.", show_alert=True)
+        return
+    file = BufferedInputFile(data, filename=f"stats_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    await c.message.answer_document(file, caption="📗 Экспорт статистики (Excel)")
+    await c.answer()
+
+
+@dp.callback_query(F.data == "export_logs_xlsx")
+async def export_logs_xlsx(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    filters = (await state.get_data()).get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    export_rows = [["id", "user_id", "action", "details", "timestamp"]]
+    export_rows.extend(fetch_logs_for_export(filters, limit=5000))
+    data = xlsx_bytes_from_rows(export_rows)
+    if not data:
+        await c.answer("Excel недоступен: установите openpyxl.", show_alert=True)
+        return
+    file = BufferedInputFile(data, filename=f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+    await c.message.answer_document(file, caption="📗 Экспорт логов (Excel)")
+    await c.answer()
+
+
+async def _render_logs_with_filters(c: types.CallbackQuery, state: FSMContext, answer_text: Optional[str] = None):
+    filters = (await state.get_data()).get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    rows = fetch_logs_filtered(filters, limit=20)
+    lines = ["📋 <b>Логи</b> (последние 20)\n"]
+    if rows:
+        for rid, uid, action, details, ts in rows:
+            lines.append(
+                f"• #{rid} | {ts}\n"
+                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(str(details or ''))}\n"
+            )
+    else:
+        lines.append("Логи по текущим фильтрам не найдены.")
+    await send_step(c, "\n".join(lines), build_admin_logs_filters_kb(filters), state=state)
+    await c.answer(answer_text or "")
+
+
+@dp.callback_query(F.data.startswith("adm_logs_mode_"))
+async def adm_logs_set_mode(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    mode = (c.data or "").replace("adm_logs_mode_", "")
+    if mode not in ("all", "bot", "admin", "errors"):
+        await c.answer("Некорректный фильтр", show_alert=True)
+        return
+    d = await state.get_data()
+    filters = d.get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    filters["mode"] = mode
+    await state.update_data(adm_logs_filters=filters)
+    await _render_logs_with_filters(c, state, "Фильтр применен")
+
+
+@dp.callback_query(F.data.startswith("adm_logs_days_"))
+async def adm_logs_set_days(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    raw = (c.data or "").replace("adm_logs_days_", "")
+    if not raw.isdigit():
+        await c.answer("Некорректный фильтр", show_alert=True)
+        return
+    d = await state.get_data()
+    filters = d.get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    filters["days"] = int(raw)
+    await state.update_data(adm_logs_filters=filters)
+    await _render_logs_with_filters(c, state, "Фильтр применен")
+
+
+@dp.callback_query(F.data == "adm_logs_set_uid")
+async def adm_logs_set_uid(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(AdminLogsState.wait_user_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Отмена", callback_data="adm_logs_reset")
+    await send_step(c, "Введите user_id для фильтра логов (или 0 для сброса):", kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "adm_logs_reset")
+async def adm_logs_reset(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(None)
+    filters = {"mode": "all", "days": 7, "user_id": None}
+    await state.update_data(adm_logs_filters=filters)
+    await _render_logs_with_filters(c, state, "Фильтры сброшены")
+
+
+@dp.message(AdminLogsState.wait_user_id)
+async def adm_logs_wait_uid(m: types.Message, state: FSMContext):
+    if not can_open_admin_panel(m.from_user.id):
+        await state.clear()
+        await m.answer("Нет доступа.")
+        return
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await send_step(m, "❌ Введите числовой user_id (или 0).", state=state)
+        return
+    uid_val = int(raw)
+    d = await state.get_data()
+    filters = d.get("adm_logs_filters") or {"mode": "all", "days": 7, "user_id": None}
+    filters["user_id"] = None if uid_val == 0 else uid_val
+    await state.set_state(None)
+    await state.update_data(adm_logs_filters=filters)
+    rows = fetch_logs_filtered(filters, limit=20)
+    lines = ["📋 <b>Логи</b> (последние 20)\n"]
+    if rows:
+        for rid, uid, action, details, ts in rows:
+            lines.append(
+                f"• #{rid} | {ts}\n"
+                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(str(details or ''))}\n"
+            )
+    else:
+        lines.append("Логи по текущим фильтрам не найдены.")
+    await send_step(m, "\n".join(lines), build_admin_logs_filters_kb(filters), state=state)
+
+
 @dp.callback_query(F.data == "adm_search_posts")
-async def adm_search_posts(c: types.CallbackQuery):
-    await c.answer("Поиск публикаций: функция в разработке", show_alert=True)
+async def adm_search_posts(c: types.CallbackQuery, state: FSMContext):
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await state.set_state(None)
+    await send_step(c, "🔎 <b>Поиск публикаций</b>\nВыберите режим поиска:", build_admin_search_posts_kb(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "adm_search_post_id")
+async def adm_search_post_id(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminSearchPostsState.wait_post_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="adm_search_posts")
+    await send_step(c, "Введите № объявления:", kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "adm_search_staff_id")
+async def adm_search_staff_id(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(AdminSearchPostsState.wait_staff_id)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="adm_search_posts")
+    await send_step(c, "Введите ID сотрудника:", kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.message(AdminSearchPostsState.wait_post_id)
+async def adm_search_post_id_do(m: types.Message, state: FSMContext):
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await send_step(m, "❌ Введите целое число (№ объявления).", state=state)
+        return
+    post_id = int(raw)
+    with db_connect() as conn:
+        row = conn.execute(
+            """SELECT id, user_id, category, realty_type, city, district, price_val, price_cur, channel_message_id, published_date
+               FROM posts WHERE id=?""",
+            (post_id,),
+        ).fetchone()
+    if not row:
+        await send_step(m, f"❌ Объявление №{post_id} не найдено.", state=state)
+        return
+    pid, uid, cat, rtype, city, district, pval, pcur, ch_mid, pdate = row
+    price = _format_price_row(pval, pcur)
+    url = channel_post_url(ch_mid) if ch_mid else None
+    text = (
+        f"🔎 <b>Результат поиска</b>\n\n"
+        f"№: <b>{pid}</b>\n"
+        f"Сотрудник ID: <b>{uid}</b>\n"
+        f"Категория: <b>{html.escape(cat or '')}</b>\n"
+        f"Тип: <b>{html.escape(rtype or '')}</b>\n"
+        f"Город: <b>{html.escape(city or '')}</b>\n"
+        f"Район: <b>{html.escape(district or '—')}</b>\n"
+        f"Цена: <b>{html.escape(price)}</b>\n"
+        f"Дата: <b>{pdate}</b>\n"
+        f"channel_message_id: <b>{ch_mid or '—'}</b>"
+    )
+    kb = InlineKeyboardBuilder()
+    if url:
+        kb.button(text=f"Открыть №{pid} в канале", url=url)
+    kb.button(text="⬅️ К поиску", callback_data="adm_search_posts")
+    await state.set_state(None)
+    await send_step(m, text, kb.adjust(1).as_markup(), state=state)
+
+
+@dp.message(AdminSearchPostsState.wait_staff_id)
+async def adm_search_staff_id_do(m: types.Message, state: FSMContext):
+    raw = (m.text or "").strip()
+    if not raw.isdigit():
+        await send_step(m, "❌ Введите целое число (ID сотрудника).", state=state)
+        return
+    staff_id = int(raw)
+    with db_connect() as conn:
+        rows = conn.execute(
+            """SELECT id, category, realty_type, city, district, price_val, price_cur, channel_message_id, published_date
+               FROM posts
+               WHERE user_id=?
+               ORDER BY id DESC
+               LIMIT 20""",
+            (staff_id,),
+        ).fetchall()
+    kb = InlineKeyboardBuilder()
+    if not rows:
+        kb.button(text="⬅️ К поиску", callback_data="adm_search_posts")
+        await state.set_state(None)
+        await send_step(m, f"❌ По сотруднику ID {staff_id} публикации не найдены.", kb.adjust(1).as_markup(), state=state)
+        return
+    lines = [f"🔎 <b>Публикации сотрудника ID {staff_id}</b> (последние {len(rows)}):\n"]
+    for pid, cat, rtype, city, district, pval, pcur, ch_mid, pdate in rows:
+        lines.append(
+            f"• №<b>{pid}</b> | {html.escape(cat or '')}/{html.escape(rtype or '')}\n"
+            f"  📍 {html.escape(city or '')}, {html.escape(district or '—')}\n"
+            f"  💰 {html.escape(_format_price_row(pval, pcur))} | {pdate}"
+        )
+        url = channel_post_url(ch_mid) if ch_mid else None
+        if url:
+            kb.button(text=f"Открыть №{pid}", url=url)
+    kb.button(text="⬅️ К поиску", callback_data="adm_search_posts")
+    await state.set_state(None)
+    await send_step(m, "\n".join(lines), kb.adjust(1).as_markup(), state=state)
 
 
 @dp.callback_query(F.data == "adm_delete_post")
@@ -1961,6 +2423,7 @@ async def adm_delete_post_do(m: types.Message, state: FSMContext):
     with db_connect() as conn:
         conn.execute("DELETE FROM posts WHERE id=?", (post_id,))
         conn.commit()
+    add_log(m.from_user.id, "Админ: удаление объявления", f"post_id={post_id}, deleted_in_channel={deleted_in_channel}")
     await state.clear()
     await state.update_data(app_mode="staff")
     tail = " Сообщение в канале удалено." if deleted_in_channel else (

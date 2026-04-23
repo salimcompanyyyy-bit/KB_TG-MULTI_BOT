@@ -16,6 +16,7 @@ Scope: internal working memory for this repository.
   - New staff users now pass mandatory access request flow (full name, phone, Telegram username, userinfo ID).
   - Admin staff section now has real list/cards/actions and access request moderation.
   - Staff section UI was expanded: overview counters, stricter admin-only access, and request priority flag with moderation sorting.
+  - Admin reports/search are now live: stats dashboard, logs with filters, CSV/XLSX export, post search by ad number and staff ID.
 
 ## Working Rules For Agent (EN)
 
@@ -35,11 +36,7 @@ Scope: internal working memory for this repository.
 - Client entry strategy is fixed: no Mini App, continue with current bot DM search flow.
 - Optional LK improvements: monthly publication counter, drafts.
 - Admin placeholders still pending:
-  - `adm_stats`
-  - `export_stats`
-  - `adm_logs`
-  - `export_logs`
-  - `adm_search_posts`
+  - (none in current admin reports/search block)
 
 ---
 
@@ -64,6 +61,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Новые сотрудники проходят обязательную заявку на доступ (ФИО, телефон, Telegram username, ID из @userinfobot).
   - Раздел админки по сотрудникам теперь рабочий: список, карточка, редактирование, роли, обработка заявок.
   - Окно «Сотрудники» расширено: сводные счетчики, строгий доступ только админам и приоритет заявок с сортировкой для модерации.
+  - Блок админ-отчетов и поиска работает: статистика, логи с фильтрами, экспорт CSV/XLSX, поиск публикаций по № и ID сотрудника.
 
 ### Рабочие правила для агента
 
@@ -83,11 +81,7 @@ Allowed commit types (and only these): `добавление`, `исправле
 - Стратегия клиентского входа зафиксирована: без Mini App, развиваем текущий поиск через личку бота.
 - Опциональные улучшения ЛК: счетчик публикаций за месяц и черновики.
 - В админке остаются заглушки:
-  - `adm_stats`
-  - `export_stats`
-  - `adm_logs`
-  - `export_logs`
-  - `adm_search_posts`
+  - (в блоке отчетов/поиска заглушек больше нет)
 
 ### Словарь типов коммитов
 
