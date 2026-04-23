@@ -2,6 +2,7 @@ import asyncio
 import csv
 import html
 import json
+import re
 import sqlite3
 import logging
 from typing import Optional
@@ -42,6 +43,16 @@ def init_db():
     conn.commit()
     conn.close()
     _migrate_posts_channel_message_id()
+    _migrate_users_tg_username()
+
+
+def _migrate_users_tg_username():
+    try:
+        with db_connect() as conn:
+            conn.execute("ALTER TABLE users ADD COLUMN tg_username TEXT")
+            conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 def _migrate_posts_channel_message_id():
@@ -62,6 +73,75 @@ def channel_post_url(message_id: int) -> Optional[str]:
     if cid.startswith('-100'):
         return f"https://t.me/c/{cid.replace('-100', '')}/{message_id}"
     return f"https://t.me/c/{cid.lstrip('-')}/{message_id}"
+
+
+TG_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{5,32}$")
+
+
+def normalize_telegram_username(text: str) -> Optional[str]:
+    """Возвращает username без @ или None если неверный формат. Пустая строка — снять username."""
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    low = s.casefold()
+    if low in ("-", "нет", "none", "удалить", "очистить", "0"):
+        return ""
+    for prefix in ("https://t.me/", "http://t.me/", "https://telegram.me/", "http://telegram.me/"):
+        if low.startswith(prefix):
+            s = s[len(prefix) :].split("/")[0].split("?")[0].strip()
+            low = s.casefold()
+            break
+    s = s.lstrip("@").strip()
+    if not s or not TG_USERNAME_RE.match(s):
+        return None
+    return s
+
+
+def profile_preview_dummy_data() -> dict:
+    """Условный объект для предпросмотра блока контактов в личном кабинете."""
+    return {
+        "category": "Жилое",
+        "realty_type": "Квартира",
+        "city": "Ташкент",
+        "district": "Пример района",
+        "street": "ул. Примерная",
+        "house": "1",
+        "total_area": 68.5,
+        "useful_area": "",
+        "rooms": "3",
+        "desc": "Пример описания (это не реальный объект, только шаблон).",
+        "price_val": 150000000,
+        "price_cur": "сум",
+    }
+
+
+def save_user_profile(user_id: int, name: str, phone: str) -> None:
+    """Сохранить имя и телефон, не затирая tg_username и role."""
+    with db_connect() as conn:
+        row = conn.execute("SELECT tg_username, role FROM users WHERE id=?", (user_id,)).fetchone()
+        tg = row[0] if row else None
+        role = (row[1] if row and row[1] else None) or "staff"
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, name, phone, role, tg_username) VALUES (?,?,?,?,?)",
+            (user_id, name, phone, role, tg),
+        )
+        conn.commit()
+
+
+def set_user_telegram_username(user_id: int, username: Optional[str]) -> None:
+    """username: строка без @ или None чтобы очистить поле."""
+    with db_connect() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        if row:
+            conn.execute("UPDATE users SET tg_username=? WHERE id=?", (username, user_id))
+        else:
+            conn.execute(
+                "INSERT INTO users (id, name, phone, role, tg_username) VALUES (?,?,?,?,?)",
+                (user_id, "Сотрудник", "", "staff", username),
+            )
+        conn.commit()
 
 
 def _post_row_tuple(user_id: int, data: dict, channel_message_id: Optional[int]):
@@ -241,6 +321,11 @@ class PostState(StatesGroup):
 class ProfileState(StatesGroup):
     name = State()
     phone = State()
+
+
+class ProfileTgState(StatesGroup):
+    value = State()
+
 
 class AdminState(StatesGroup):
     add_id = State()
@@ -738,32 +823,39 @@ async def adm_menu_service(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 
+def _profile_inline_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📝 Изменить данные", callback_data="edit_p")
+    kb.button(text="📋 Мои публикации", callback_data="my_posts")
+    kb.button(text="🔗 Указать Telegram", callback_data="profile_set_tg")
+    kb.button(text="👁 Предпросмотр карточки", callback_data="profile_preview_card")
+    kb.button(text="⬅️ Назад", callback_data="go_back")
+    return kb.adjust(2).as_markup()
+
+
+async def send_profile_screen(m_obj, user_id: int, state: FSMContext):
+    with db_connect() as conn:
+        p = conn.execute("SELECT name, phone, tg_username FROM users WHERE id=?", (user_id,)).fetchone()
+    if not p or not p[0]:
+        await send_step(m_obj, "Введите ваше Имя и Фамилию:", state=state)
+        await state.set_state(ProfileState.name)
+        return
+    parts = [f"👤 <b>Профиль:</b> {html.escape(p[0])}", f"📞 <b>Тел:</b> {html.escape(p[1] or '')}"]
+    if p[2]:
+        u = str(p[2]).strip().lstrip("@")
+        if TG_USERNAME_RE.match(u):
+            parts.append(f'🔗 <b>Telegram:</b> <a href="https://t.me/{u}">@{html.escape(u)}</a>')
+        else:
+            parts.append(f"🔗 <b>Telegram:</b> @{html.escape(u)}")
+    await send_step(m_obj, "\n".join(parts), _profile_inline_kb(), state)
+
+
 @dp.message(F.text == "👤 Личный кабинет")
 async def profile_handler(m: types.Message, state: FSMContext):
     prev = (await state.get_data()).get("app_mode", "staff")
     await state.clear()
     await state.update_data(app_mode=prev)
-    with db_connect() as conn:
-        p = conn.execute("SELECT name, phone FROM users WHERE id=?", (m.from_user.id,)).fetchone()
-    
-    if p and p[0]:
-        await send_step(
-            m,
-            f"👤 <b>Профиль:</b> {html.escape(p[0])}\n📞 <b>Тел:</b> {html.escape(p[1] or '')}",
-            _profile_inline_kb(),
-            state,
-        )
-    else:
-        await send_step(m, "Введите ваше Имя и Фамилию:", state=state)
-        await state.set_state(ProfileState.name)
-
-
-def _profile_inline_kb():
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📝 Изменить данные", callback_data="edit_p")
-    kb.button(text="📋 Мои публикации", callback_data="my_posts")
-    kb.button(text="⬅️ Назад", callback_data="go_back")
-    return kb.adjust(2).as_markup()
+    await send_profile_screen(m, m.from_user.id, state)
 
 
 @dp.callback_query(F.data == "edit_p")
@@ -787,20 +879,91 @@ async def cancel_profile_edit(c: types.CallbackQuery, state: FSMContext):
     mode = (await state.get_data()).get("app_mode", "staff")
     await state.set_state(None)
     await state.update_data(app_mode=mode, profile_from_edit=False)
+    await send_profile_screen(c.message, c.from_user.id, state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "profile_reload")
+async def profile_reload(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(None)
+    await send_profile_screen(c.message, c.from_user.id, state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "profile_set_tg")
+async def profile_set_tg_start(c: types.CallbackQuery, state: FSMContext):
     uid = c.from_user.id
     with db_connect() as conn:
-        p = conn.execute("SELECT name, phone FROM users WHERE id=?", (uid,)).fetchone()
-    if p and p[0]:
-        await send_step(
-            c.message,
-            f"👤 <b>Профиль:</b> {html.escape(p[0])}\n📞 <b>Тел:</b> {html.escape(p[1] or '')}",
-            _profile_inline_kb(),
-            state,
-        )
-    else:
-        await send_step(c.message, "Профиль не заполнен. Введите имя и фамилию:", state=state)
-        await state.set_state(ProfileState.name)
+        row = conn.execute("SELECT name FROM users WHERE id=?", (uid,)).fetchone()
+    if not row or not row[0]:
+        await c.answer("Сначала заполните профиль (имя и телефон).", show_alert=True)
+        return
+    d = await state.get_data()
+    await state.update_data(app_mode=d.get("app_mode", "staff"))
+    await state.set_state(ProfileTgState.value)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Отмена", callback_data="cancel_profile_tg")
+    await send_step(
+        c.message,
+        "Введите ваш <b>Telegram</b>:\n"
+        "• username, например <code>@Azizbek_3393</code>\n"
+        "• или ссылку <code>https://t.me/Azizbek_3393</code>\n\n"
+        "Чтобы убрать username из профиля, отправьте: <code>-</code>",
+        kb.adjust(1).as_markup(),
+        state,
+    )
     await c.answer()
+
+
+@dp.callback_query(F.data == "cancel_profile_tg")
+async def cancel_profile_tg(c: types.CallbackQuery, state: FSMContext):
+    await state.set_state(None)
+    await send_profile_screen(c.message, c.from_user.id, state)
+    await c.answer()
+
+
+@dp.callback_query(F.data == "profile_preview_card")
+async def profile_preview_card(c: types.CallbackQuery, state: FSMContext):
+    uid = c.from_user.id
+    with db_connect() as conn:
+        row = conn.execute("SELECT name, phone, tg_username FROM users WHERE id=?", (uid,)).fetchone()
+    if not row or not row[0]:
+        await c.answer("Сначала заполните профиль (имя и телефон).", show_alert=True)
+        return
+    name, phone, tg = row[0], (row[1] or "").strip() or None, (row[2] or "").strip() or None
+    dummy = profile_preview_dummy_data()
+    card = build_card_text(dummy, name, contact_phone=phone, contact_tg=tg)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ В личный кабинет", callback_data="profile_reload")
+    await send_step(
+        c.message,
+        "<b>Предпросмотр</b> — пример объекта; внизу карточки ваши контакты, как в посте канала:\n\n" + card,
+        kb.adjust(1).as_markup(),
+        state,
+    )
+    await c.answer()
+
+
+@dp.message(ProfileTgState.value)
+async def process_profile_tg(m: types.Message, state: FSMContext):
+    norm = normalize_telegram_username(m.text or "")
+    if norm is None:
+        await send_step(
+            m,
+            "❌ Неверный формат. Укажите @username или ссылку <code>https://t.me/…</code>\n"
+            "(латиница, цифры, подчёркивание, длина 5–32).",
+            state=state,
+        )
+        return
+    d = await state.get_data()
+    mode = d.get("app_mode", "staff")
+    if norm == "":
+        set_user_telegram_username(m.from_user.id, None)
+    else:
+        set_user_telegram_username(m.from_user.id, norm)
+    await state.clear()
+    await state.update_data(app_mode=mode)
+    await send_profile_screen(m, m.from_user.id, state)
 
 
 # --- ЛОГИКА АДМИНКИ ---
@@ -840,9 +1003,12 @@ async def adm_add_process(m: types.Message, state: FSMContext):
         
         # Добавляем пользователя
         with db_connect() as conn:
-            conn.execute("INSERT INTO users (id, name, phone, role) VALUES (?, ?, ?, ?)", 
-                        (user_id, "Новый сотрудник", "", "staff"))
-        
+            conn.execute(
+                "INSERT INTO users (id, name, phone, role, tg_username) VALUES (?, ?, ?, ?, ?)",
+                (user_id, "Новый сотрудник", "", "staff", None),
+            )
+            conn.commit()
+
         await state.clear()
         await state.update_data(app_mode="staff")
         await send_step(m, f"✅ Сотрудник с ID {user_id} успешно добавлен!", reply_markup=main_menu_kb(m.from_user.id), state=state)
@@ -1533,9 +1699,15 @@ async def back_to_media_choice(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 
-def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = None) -> str:
+def build_card_text(
+    data: dict,
+    employee_name: str,
+    listing_no: Optional[int] = None,
+    contact_phone: Optional[str] = None,
+    contact_tg: Optional[str] = None,
+) -> str:
     """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts).
-    Поля экранируются под parse_mode=HTML в Telegram."""
+    contact_phone / contact_tg — из профиля сотрудника (tg без @). Поля экранируются под parse_mode=HTML."""
     category = html.escape(str(data.get('category') or ''))
     realty_type = html.escape(str(data.get('realty_type') or ''))
     city = html.escape(str(data.get('city') or ''))
@@ -1580,6 +1752,14 @@ def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = 
     if price_text:
         card_text += f"{price_text}\n"
     card_text += f"📞 Контакт: {emp}\n"
+    if contact_phone and str(contact_phone).strip():
+        card_text += f"☎️ Тел.: {html.escape(str(contact_phone).strip())}\n"
+    if contact_tg and str(contact_tg).strip():
+        u = str(contact_tg).strip().lstrip("@")
+        if TG_USERNAME_RE.match(u):
+            card_text += f'🔗 Telegram: <a href="https://t.me/{u}">@{html.escape(u)}</a>\n'
+        else:
+            card_text += f"🔗 Telegram: @{html.escape(u)}\n"
     card_text += "━━━━━━━━━━━━━━━━━━━━"
     return card_text
 
@@ -1588,12 +1768,23 @@ def build_card_text(data: dict, employee_name: str, listing_no: Optional[int] = 
 async def show_preview(m_obj, state: FSMContext):
     data = await state.get_data()
 
-    # Получаем имя сотрудника
     with db_connect() as conn:
-        user = conn.execute("SELECT name FROM users WHERE id=?", (m_obj.from_user.id,)).fetchone()
-    
-    employee_name = user[0] if user else "Сотрудник"
-    card_text = build_card_text(data, employee_name)
+        user = conn.execute(
+            "SELECT name, phone, tg_username FROM users WHERE id=?",
+            (m_obj.from_user.id,),
+        ).fetchone()
+    if user:
+        employee_name, c_phone, c_tg = user[0], user[1], user[2]
+    else:
+        employee_name, c_phone, c_tg = "Сотрудник", None, None
+    c_phone = (c_phone or "").strip() or None
+    c_tg = (c_tg or "").strip() or None
+    card_text = build_card_text(
+        data,
+        employee_name or "Сотрудник",
+        contact_phone=c_phone,
+        contact_tg=c_tg,
+    )
     
     # Отправляем превью
     kb = InlineKeyboardBuilder()
@@ -1616,16 +1807,28 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
 
     category = data.get('category', '')
     realty_type = data.get('realty_type', '')
-    # Получаем имя сотрудника
     with db_connect() as conn:
-        user = conn.execute("SELECT name FROM users WHERE id=?", (c.from_user.id,)).fetchone()
-    
-    employee_name = user[0] if user else "Сотрудник"
+        user = conn.execute(
+            "SELECT name, phone, tg_username FROM users WHERE id=?",
+            (c.from_user.id,),
+        ).fetchone()
+    if user:
+        employee_name, c_phone, c_tg = user[0], user[1], user[2]
+    else:
+        employee_name, c_phone, c_tg = "Сотрудник", None, None
+    c_phone = (c_phone or "").strip() or None
+    c_tg = (c_tg or "").strip() or None
     post_id = insert_post(c.from_user.id, data, None)
 
     # Публикуем в канал
     try:
-        card_text = build_card_text(data, employee_name, listing_no=post_id)
+        card_text = build_card_text(
+            data,
+            employee_name or "Сотрудник",
+            listing_no=post_id,
+            contact_phone=c_phone,
+            contact_tg=c_tg,
+        )
         media_type = data.get('media_type')
         media_files = data.get('media_files', [])
         sent_msg = None
@@ -1804,27 +2007,14 @@ async def process_phone(m: types.Message, state: FSMContext):
     prev_mode = data.get("app_mode", "staff")
     name = data["name"]
 
-    with db_connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO users (id, name, phone) VALUES (?, ?, ?)",
-            (m.from_user.id, name, phone),
-        )
-        conn.commit()
+    save_user_profile(m.from_user.id, name, phone)
 
     await state.clear()
     await state.update_data(app_mode=prev_mode)
 
     if from_edit:
-        with db_connect() as conn:
-            p = conn.execute("SELECT name, phone FROM users WHERE id=?", (m.from_user.id,)).fetchone()
-        nm = html.escape(p[0]) if p and p[0] else ""
-        ph = html.escape(p[1] or "") if p else ""
-        await send_step(
-            m,
-            f"✅ Данные профиля обновлены.\n\n👤 <b>Профиль:</b> {nm}\n📞 <b>Тел:</b> {ph}",
-            _profile_inline_kb(),
-            state=state,
-        )
+        await send_step(m, "✅ Данные профиля обновлены.", state=state)
+        await send_profile_screen(m, m.from_user.id, state)
     elif prev_mode == "client":
         await send_step(m, "✅ Профиль успешно создан!", reply_markup=client_menu_kb(), state=state)
     else:
