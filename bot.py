@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 import logging
+from urllib.parse import quote
 from datetime import datetime, timedelta
 from typing import Optional
 from aiogram import Bot, Dispatcher, types, F
@@ -105,6 +106,16 @@ def channel_post_url(message_id: int) -> Optional[str]:
     if cid.startswith('-100'):
         return f"https://t.me/c/{cid.replace('-100', '')}/{message_id}"
     return f"https://t.me/c/{cid.lstrip('-')}/{message_id}"
+
+
+def employee_contact_url(username: Optional[str], listing_no: int) -> Optional[str]:
+    if not username:
+        return None
+    u = str(username).strip().lstrip("@")
+    if not TG_USERNAME_RE.match(u):
+        return None
+    text = f"Здравствуйте! Пишу по объявлению №{listing_no}."
+    return f"https://t.me/{u}?text={quote(text)}"
 
 
 TG_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{5,32}$")
@@ -3204,6 +3215,12 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
             contact_phone=c_phone,
             contact_tg=c_tg,
         )
+        contact_url = employee_contact_url(c_tg, post_id)
+        contact_kb = None
+        if contact_url:
+            kb_contact = InlineKeyboardBuilder()
+            kb_contact.button(text=f"💬 Написать по №{post_id}", url=contact_url)
+            contact_kb = kb_contact.adjust(1).as_markup()
         media_type = data.get('media_type')
         media_files = data.get('media_files', [])
         sent_msg = None
@@ -3223,9 +3240,9 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
             if len(prepared) == 1:
                 only_type, only_fid = prepared[0]
                 if only_type == "video":
-                    sent_msg = await bot.send_video(CHANNEL_ID, only_fid, caption=card_text, parse_mode="HTML")
+                    sent_msg = await bot.send_video(CHANNEL_ID, only_fid, caption=card_text, parse_mode="HTML", reply_markup=contact_kb)
                 else:
-                    sent_msg = await bot.send_photo(CHANNEL_ID, only_fid, caption=card_text, parse_mode="HTML")
+                    sent_msg = await bot.send_photo(CHANNEL_ID, only_fid, caption=card_text, parse_mode="HTML", reply_markup=contact_kb)
             elif len(prepared) > 1:
                 media_group = []
                 for idx, (mtype, fid) in enumerate(prepared[:10]):
@@ -3239,12 +3256,20 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
                     media_group.append(media)
                 sent = await bot.send_media_group(CHANNEL_ID, media_group)
                 sent_msg = sent[0] if sent else None
+                if sent_msg and contact_kb:
+                    await bot.send_message(
+                        CHANNEL_ID,
+                        f"💬 Связаться с сотрудником по объявлению №{post_id}",
+                        reply_markup=contact_kb,
+                        reply_to_message_id=sent_msg.message_id,
+                    )
         else:
             sent_msg = await bot.send_message(
                 CHANNEL_ID,
                 card_text,
                 parse_mode="HTML",
                 link_preview_options=LinkPreviewOptions(is_disabled=True),
+                reply_markup=contact_kb,
             )
         ch_mid = sent_msg.message_id if sent_msg else None
         update_post_channel_message_id(post_id, ch_mid)

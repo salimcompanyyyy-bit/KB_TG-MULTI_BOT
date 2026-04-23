@@ -17,6 +17,7 @@ Scope: internal working memory for this repository.
   - Admin staff section now has real list/cards/actions and access request moderation.
   - Staff section UI was expanded: overview counters, stricter admin-only access, and request priority flag with moderation sorting.
   - Admin reports/search are now live: stats dashboard, logs with filters, CSV/XLSX export, post search by ad number and staff ID.
+  - Channel posts now include quick contact button to employee with prefilled message containing listing number.
 
 ## Working Rules For Agent (EN)
 
@@ -62,6 +63,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Раздел админки по сотрудникам теперь рабочий: список, карточка, редактирование, роли, обработка заявок.
   - Окно «Сотрудники» расширено: сводные счетчики, строгий доступ только админам и приоритет заявок с сортировкой для модерации.
   - Блок админ-отчетов и поиска работает: статистика, логи с фильтрами, экспорт CSV/XLSX, поиск публикаций по № и ID сотрудника.
+  - В постах канала добавлена кнопка быстрого контакта с сотрудником с автотекстом по номеру объявления.
 
 ### Рабочие правила для агента
 
