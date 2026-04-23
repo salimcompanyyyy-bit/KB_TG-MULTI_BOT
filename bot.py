@@ -672,6 +672,15 @@ def build_staff_member_actions_kb(user_id: int, role: str):
     return kb.adjust(1).as_markup()
 
 
+def role_label_ru(role: str) -> str:
+    role_norm = (role or "").strip().lower()
+    if role_norm == "admin":
+        return "Администратор"
+    if role_norm == "staff":
+        return "Сотрудник"
+    return role or "—"
+
+
 def build_access_requests_list_kb(rows, page: int, total: int, page_size: int):
     kb = InlineKeyboardBuilder()
     for req_id, user_id, full_name, _phone, _tg, _uid, _submitted, priority in rows:
@@ -1607,13 +1616,14 @@ async def adm_staff_open(c: types.CallbackQuery, state: FSMContext):
     name, phone, tg, role = row
     posts_count = count_user_posts(user_id)
     tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
+    role_text = role_label_ru(role)
     text = (
         f"👤 <b>Карточка сотрудника</b>\n\n"
         f"🆔 ID: <b>{user_id}</b>\n"
         f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
         f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
         f"🔗 Telegram: <b>{tg_text}</b>\n"
-        f"🛡 Роль: <b>{role}</b>\n"
+        f"🛡 Роль: <b>{role_text}</b>\n"
         f"📦 Публикаций: <b>{posts_count}</b>"
     )
     await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
@@ -1718,13 +1728,14 @@ async def adm_staff_change_role(c: types.CallbackQuery, state: FSMContext):
     name, phone, tg, role = row
     posts_count = count_user_posts(user_id)
     tg_text = f"@{html.escape((tg or '').strip())}" if tg else "—"
+    role_text = role_label_ru(role)
     text = (
         f"👤 <b>Карточка сотрудника</b>\n\n"
         f"🆔 ID: <b>{user_id}</b>\n"
         f"👤 ФИО: <b>{html.escape(name or '—')}</b>\n"
         f"📞 Телефон: <b>{html.escape(phone or '—')}</b>\n"
         f"🔗 Telegram: <b>{tg_text}</b>\n"
-        f"🛡 Роль: <b>{role}</b>\n"
+        f"🛡 Роль: <b>{role_text}</b>\n"
         f"📦 Публикаций: <b>{posts_count}</b>"
     )
     await send_step(c, text, build_staff_member_actions_kb(user_id, role), state=state)
