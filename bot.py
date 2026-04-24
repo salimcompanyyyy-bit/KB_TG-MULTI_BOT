@@ -9,7 +9,7 @@ import logging
 from urllib.parse import quote
 from datetime import datetime, timedelta
 from typing import Optional
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types, F, BaseMiddleware
 from aiogram.types import InputMediaPhoto, InputMediaVideo, LinkPreviewOptions, BufferedInputFile
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -28,6 +28,24 @@ CARD_DECO_LINE = "━" * 32
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 logging.basicConfig(level=logging.INFO)
+
+
+class DeleteCallbackMessageMiddleware(BaseMiddleware):
+    """Удаляет сообщение с inline-кнопками сразу после нажатия."""
+
+    async def __call__(self, handler, event: types.CallbackQuery, data):
+        result = await handler(event, data)
+        msg = event.message
+        if msg:
+            try:
+                await msg.delete()
+            except Exception:
+                # Игнорируем ошибки удаления (например, если сообщение уже удалено).
+                pass
+        return result
+
+
+dp.callback_query.middleware(DeleteCallbackMessageMiddleware())
 
 
 def db_connect():
@@ -68,6 +86,25 @@ def _migrate_posts_channel_message_id():
             conn.commit()
     except sqlite3.OperationalError:
         pass
+
+
+def _migrate_posts_lifecycle():
+    with db_connect() as conn:
+        try:
+            conn.execute("ALTER TABLE posts ADD COLUMN status TEXT NOT NULL DEFAULT 'published'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE posts ADD COLUMN removed_reason TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE posts ADD COLUMN removed_at TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
+        conn.execute("UPDATE posts SET status='published' WHERE status IS NULL OR TRIM(status)=''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_status_date ON posts(status, published_date DESC)")
+        conn.commit()
 
 
 def _migrate_staff_access_requests():
@@ -283,7 +320,7 @@ def fetch_posts_filtered(city: Optional[str], category: Optional[str], realty_ty
         where.append('realty_type = ?')
         params.append(realty_type)
     sql = f"""SELECT id, category, realty_type, city, district, price_val, price_cur, channel_message_id, published_date
-        FROM posts WHERE {' AND '.join(where)} AND channel_message_id IS NOT NULL
+        FROM posts WHERE {' AND '.join(where)} AND {ACTIVE_POSTS_WHERE}
         ORDER BY published_date DESC LIMIT ? OFFSET ?"""
     params.extend([limit, offset])
     with db_connect() as conn:
@@ -291,7 +328,7 @@ def fetch_posts_filtered(city: Optional[str], category: Optional[str], realty_ty
 
 
 def fetch_category_counts(city: Optional[str]) -> dict:
-    where = ["channel_message_id IS NOT NULL"]
+    where = [ACTIVE_POSTS_WHERE]
     params = []
     if city:
         where.append("city = ?")
@@ -310,7 +347,7 @@ def fetch_category_counts(city: Optional[str]) -> dict:
 def fetch_city_counts() -> dict:
     sql = """SELECT city, COUNT(*) as cnt
              FROM posts
-             WHERE channel_message_id IS NOT NULL
+             WHERE channel_message_id IS NOT NULL AND COALESCE(status, 'published') = 'published'
              GROUP BY city"""
     with db_connect() as conn:
         rows = conn.execute(sql).fetchall()
@@ -510,16 +547,16 @@ def build_stats_text() -> str:
     d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     d30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
     with db_connect() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL").fetchone()[0] or 0
-        c1 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d1,)).fetchone()[0] or 0
-        c7 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d7,)).fetchone()[0] or 0
-        c30 = conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d30,)).fetchone()[0] or 0
+        total = conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE}").fetchone()[0] or 0
+        c1 = conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d1,)).fetchone()[0] or 0
+        c7 = conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d7,)).fetchone()[0] or 0
+        c30 = conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d30,)).fetchone()[0] or 0
         pending = conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0
         top = conn.execute(
             """SELECT p.user_id, COALESCE(u.name, 'Сотрудник'), COUNT(*) AS cnt
                FROM posts p
                LEFT JOIN users u ON u.id = p.user_id
-               WHERE p.channel_message_id IS NOT NULL
+               WHERE p.channel_message_id IS NOT NULL AND COALESCE(p.status, 'published') = 'published'
                GROUP BY p.user_id
                ORDER BY cnt DESC
                LIMIT 5"""
@@ -548,16 +585,16 @@ def build_stats_export_rows():
     d7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
     d30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
     with db_connect() as conn:
-        total = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL").fetchone()[0] or 0)
-        c1 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d1,)).fetchone()[0] or 0)
-        c7 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d7,)).fetchone()[0] or 0)
-        c30 = int(conn.execute("SELECT COUNT(*) FROM posts WHERE channel_message_id IS NOT NULL AND published_date >= ?", (d30,)).fetchone()[0] or 0)
+        total = int(conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE}").fetchone()[0] or 0)
+        c1 = int(conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d1,)).fetchone()[0] or 0)
+        c7 = int(conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d7,)).fetchone()[0] or 0)
+        c30 = int(conn.execute(f"SELECT COUNT(*) FROM posts WHERE {ACTIVE_POSTS_WHERE} AND published_date >= ?", (d30,)).fetchone()[0] or 0)
         pending = int(conn.execute("SELECT COUNT(*) FROM staff_access_requests WHERE status='pending'").fetchone()[0] or 0)
         top = conn.execute(
             """SELECT p.user_id, COALESCE(u.name, 'Сотрудник'), COUNT(*) AS cnt
                FROM posts p
                LEFT JOIN users u ON u.id = p.user_id
-               WHERE p.channel_message_id IS NOT NULL
+               WHERE p.channel_message_id IS NOT NULL AND COALESCE(p.status, 'published') = 'published'
                GROUP BY p.user_id
                ORDER BY cnt DESC
                LIMIT 20"""
@@ -600,6 +637,7 @@ def xlsx_bytes_from_rows(rows) -> bytes:
     return out.getvalue()
 
 init_db()
+_migrate_posts_lifecycle()
 
 # --- СПИСКИ ГОРОДОВ ---
 CITIES = {
@@ -660,6 +698,13 @@ BTN_ROLE_STAFF = "👔 Сотрудник"
 BTN_ROLE_CLIENT = "🛒 Клиент"
 BTN_ROLE_SWITCH = "↩️ Сменить режим"
 BTN_SEARCH = "🔍 Поиск объявлений"
+POST_STATUS_PUBLISHED = "published"
+POST_STATUS_DELETED = "deleted"
+POST_STATUS_SOLD = "sold"
+REMOVE_REASON_SOLD = "sold"
+REMOVE_REASON_ERROR = "error"
+REMOVE_REASON_FIX = "fix"
+ACTIVE_POSTS_WHERE = "channel_message_id IS NOT NULL AND COALESCE(status, 'published') = 'published'"
 
 
 def role_select_kb():
@@ -782,7 +827,6 @@ def main_menu_kb(u_id):
     kb.button(text="👤 Личный кабинет")
     if u_id == OWNER_ID or get_user_role(u_id) == "admin":
         kb.button(text="⚙️ Админ-панель")
-    kb.button(text=BTN_ROLE_SWITCH)
     return kb.adjust(1).as_markup(resize_keyboard=True)
 
 def back_btn():
@@ -1450,9 +1494,10 @@ async def adm_menu_service(c: types.CallbackQuery, state: FSMContext):
 def _profile_inline_kb():
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Изменить данные", callback_data="edit_p")
-    kb.button(text="📋 Мои публикации", callback_data="my_posts")
+    kb.button(text="📁 Мои публикации", callback_data="my_posts")
     kb.button(text="🔗 Указать Telegram", callback_data="profile_set_tg")
     kb.button(text="👁 Предпросмотр карточки", callback_data="profile_preview_card")
+    kb.button(text=BTN_ROLE_SWITCH, callback_data="profile_switch_mode")
     kb.button(text="⬅️ Назад", callback_data="go_back")
     return kb.adjust(2).as_markup()
 
@@ -1484,6 +1529,13 @@ async def profile_handler(m: types.Message, state: FSMContext):
     await state.clear()
     await state.update_data(app_mode=prev)
     await send_profile_screen(m, m.from_user.id, state)
+
+
+@dp.callback_query(F.data == "profile_switch_mode")
+async def profile_switch_mode(c: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await c.message.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
+    await c.answer()
 
 
 @dp.callback_query(F.data == "edit_p")
@@ -1728,47 +1780,205 @@ async def back_to_admin(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 # --- ОБРАБОТЧИКИ НОВЫХ ФУНКЦИЙ ---
+def _remove_reason_meta(reason: str):
+    if reason == REMOVE_REASON_SOLD:
+        return POST_STATUS_SOLD, "Продажа", "Продано"
+    if reason == REMOVE_REASON_ERROR:
+        return POST_STATUS_DELETED, "Ошибка", "Удалено (ошибка)"
+    if reason == REMOVE_REASON_FIX:
+        return POST_STATUS_DELETED, "Исправление", "Удалено (исправление)"
+    return POST_STATUS_DELETED, "Удаление", "Удалено"
+
+
 @dp.callback_query(F.data == "my_posts")
-async def my_posts(c: types.CallbackQuery):
+async def my_posts_folder(c: types.CallbackQuery, state: FSMContext):
     uid = c.from_user.id
     with db_connect() as conn:
+        published_cnt = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE user_id=? AND COALESCE(status, 'published')='published'",
+                (uid,),
+            ).fetchone()[0]
+            or 0
+        )
+        deleted_cnt = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE user_id=? AND COALESCE(status, 'published')='deleted'",
+                (uid,),
+            ).fetchone()[0]
+            or 0
+        )
+        sold_cnt = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE user_id=? AND COALESCE(status, 'published')='sold'",
+                (uid,),
+            ).fetchone()[0]
+            or 0
+        )
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"📌 Активные ({published_cnt})", callback_data="my_posts_tab_published_0")
+    kb.button(text=f"🗂 Архив ({deleted_cnt})", callback_data="my_posts_tab_deleted_0")
+    kb.button(text=f"✅ Проданные ({sold_cnt})", callback_data="my_posts_tab_sold_0")
+    kb.button(text="⬅️ Назад", callback_data="profile_reload")
+    await send_step(c, "📁 <b>Мои публикации</b>\nВыберите раздел:", kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("my_posts_tab_"))
+async def my_posts_tab(c: types.CallbackQuery, state: FSMContext):
+    uid = c.from_user.id
+    payload = (c.data or "").replace("my_posts_tab_", "", 1)
+    parts = payload.rsplit("_", 1)
+    tab_raw = parts[0]
+    page = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 0
+    page = max(0, page)
+    page_size = 5
+    if tab_raw not in (POST_STATUS_PUBLISHED, POST_STATUS_DELETED, POST_STATUS_SOLD):
+        await c.answer("Неизвестный раздел", show_alert=True)
+        return
+    with db_connect() as conn:
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM posts WHERE user_id = ? AND COALESCE(status, 'published') = ?",
+                (uid, tab_raw),
+            ).fetchone()[0]
+            or 0
+        )
         rows = conn.execute(
             """SELECT id, category, realty_type, city, district, price_val, price_cur,
-                      channel_message_id, published_date
+                      channel_message_id, published_date, removed_reason, removed_at
                FROM posts
-               WHERE user_id = ? AND channel_message_id IS NOT NULL
-               ORDER BY published_date DESC
-               LIMIT 10""",
-            (uid,),
+               WHERE user_id = ? AND COALESCE(status, 'published') = ?
+               ORDER BY CASE WHEN removed_at IS NULL THEN published_date ELSE removed_at END DESC
+               LIMIT ? OFFSET ?""",
+            (uid, tab_raw, page_size, page * page_size),
         ).fetchall()
 
-    kb = InlineKeyboardBuilder()
+    titles = {
+        POST_STATUS_PUBLISHED: "📌 <b>Активные</b>",
+        POST_STATUS_DELETED: "🗂 <b>Архив</b>",
+        POST_STATUS_SOLD: "✅ <b>Проданные</b>",
+    }
+    pages_total = max(1, (total + page_size - 1) // page_size)
+    lines = [titles[tab_raw], f"Страница: <b>{page + 1}/{pages_total}</b>", ""]
     if not rows:
-        kb.button(text="⬅️ Назад", callback_data="go_back")
-        await send_step(
-            c.message,
-            "📋 <b>Ваши объявления в канале</b>\n\n"
-            "Пока нет карточек, сохранённых при публикации (с привязкой к посту в канале).",
-            kb.adjust(1).as_markup(),
-            state=None,
-        )
+        lines.append("Пока пусто.")
+        kb = InlineKeyboardBuilder()
+        kb.button(text="⬅️ К папкам", callback_data="my_posts")
+        await send_step(c, "\n".join(lines), kb.adjust(1).as_markup(), state=state)
         await c.answer()
         return
 
-    lines = ["📋 <b>Ваши последние объявления</b> (номер = № в базе и в тексте поста)\n"]
+    kb = InlineKeyboardBuilder()
     for row in rows:
-        pid, cat, rtype, city, district, pval, pcur, ch_mid, pdate = row
+        pid, cat, rtype, city, district, pval, pcur, _ch_mid, _pdate, rm_reason, rm_at = row
         price_h = _format_price_row(pval, pcur)
+        extra = ""
+        if tab_raw in (POST_STATUS_DELETED, POST_STATUS_SOLD):
+            _, _, reason_human = _remove_reason_meta(rm_reason or "")
+            stamp = rm_at or "—"
+            extra = f"  📝 {reason_human} | {stamp}\n"
         lines.append(
             f"• <b>№{pid}</b> {html.escape(cat or '')} / {html.escape(rtype or '')}\n"
             f"  📍 {html.escape(city or '')}, {html.escape(district or '—')}\n"
             f"  💰 {html.escape(price_h)}\n"
+            f"{extra}"
         )
-        url = channel_post_url(ch_mid)
-        if url:
-            kb.button(text=f"Открыть №{pid}", url=url)
-    kb.button(text="⬅️ Назад", callback_data="go_back")
-    await send_step(c.message, "\n".join(lines), kb.adjust(1).as_markup(), state=None)
+        if tab_raw == POST_STATUS_PUBLISHED:
+            kb.button(text=f"🗑 Выбрать №{pid} для удаления", callback_data=f"my_post_delete_{pid}_{page}")
+
+    if page > 0:
+        kb.button(text="⬅️ Назад", callback_data=f"my_posts_tab_{tab_raw}_{page - 1}")
+    if (page + 1) * page_size < total:
+        kb.button(text="Вперед ➡️", callback_data=f"my_posts_tab_{tab_raw}_{page + 1}")
+    kb.button(text="⬅️ К папкам", callback_data="my_posts")
+    await send_step(c, "\n".join(lines), kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("my_post_delete_"))
+async def my_post_delete_pick_reason(c: types.CallbackQuery, state: FSMContext):
+    try:
+        payload = (c.data or "").replace("my_post_delete_", "", 1)
+        post_raw, page_raw = payload.rsplit("_", 1)
+        post_id = int(post_raw)
+        page = int(page_raw) if page_raw.isdigit() else 0
+    except ValueError:
+        await c.answer("Некорректный номер", show_alert=True)
+        return
+    with db_connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM posts WHERE id=? AND user_id=? AND COALESCE(status, 'published')='published'",
+            (post_id, c.from_user.id),
+        ).fetchone()
+    if not row:
+        await c.answer("Объявление не найдено или уже снято.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Продажа", callback_data=f"my_post_reason_{post_id}_{REMOVE_REASON_SOLD}_{page}")
+    kb.button(text="⚠️ Ошибка", callback_data=f"my_post_reason_{post_id}_{REMOVE_REASON_ERROR}_{page}")
+    kb.button(text="✏️ Исправление", callback_data=f"my_post_reason_{post_id}_{REMOVE_REASON_FIX}_{page}")
+    kb.button(text="⬅️ Назад к активным", callback_data=f"my_posts_tab_published_{page}")
+    await send_step(c, f"Причина удаления объявления №<b>{post_id}</b>:", kb.adjust(1).as_markup(), state=state)
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("my_post_reason_"))
+async def my_post_delete_do(c: types.CallbackQuery, state: FSMContext):
+    payload = (c.data or "").replace("my_post_reason_", "", 1)
+    parts = payload.split("_")
+    if len(parts) < 3 or not parts[0].isdigit():
+        await c.answer("Некорректные данные", show_alert=True)
+        return
+    post_id = int(parts[0])
+    reason = parts[1]
+    page = int(parts[2]) if parts[2].isdigit() else 0
+    new_status, reason_label, reason_log = _remove_reason_meta(reason)
+    with db_connect() as conn:
+        row = conn.execute(
+            """SELECT channel_message_id, category, realty_type
+               FROM posts
+               WHERE id=? AND user_id=? AND COALESCE(status, 'published')='published'""",
+            (post_id, c.from_user.id),
+        ).fetchone()
+    if not row:
+        await c.answer("Объявление уже снято или не найдено.", show_alert=True)
+        return
+    ch_mid, category, realty_type = row
+    deleted_in_channel = False
+    if ch_mid:
+        try:
+            await bot.delete_message(CHANNEL_ID, ch_mid)
+            deleted_in_channel = True
+        except Exception as e:
+            logging.warning("my_post_delete delete_message: %s", e)
+    with db_connect() as conn:
+        conn.execute(
+            """UPDATE posts
+               SET status=?, removed_reason=?, removed_at=CURRENT_TIMESTAMP, channel_message_id=NULL
+               WHERE id=? AND user_id=? AND COALESCE(status, 'published')='published'""",
+            (new_status, reason, post_id, c.from_user.id),
+        )
+        conn.commit()
+    add_log(
+        c.from_user.id,
+        "Сотрудник: снятие объявления",
+        f"post_id={post_id}, reason={reason_log}, deleted_in_channel={deleted_in_channel}, category={category}, type={realty_type}",
+    )
+    tail = (
+        " Сообщение в канале удалено."
+        if deleted_in_channel
+        else " Сообщение в канале не удалось удалить (уже удалено вручную или нет прав)."
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ К активным", callback_data=f"my_posts_tab_published_{page}")
+    kb.button(text="📁 К папкам", callback_data="my_posts")
+    await send_step(
+        c,
+        f"✅ Объявление №{post_id} снято. Причина: <b>{reason_label}</b>.{tail}",
+        reply_markup=kb.adjust(1).as_markup(),
+        state=state,
+    )
     await c.answer()
 
 @dp.callback_query(F.data == "adm_logs")
