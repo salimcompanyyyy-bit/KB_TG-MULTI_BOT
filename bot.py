@@ -28,6 +28,21 @@ CARD_DECO_LINE = "━" * 32
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 logging.basicConfig(level=logging.INFO)
+CHAT_SWEEP_WINDOW = 80
+START_ANCHOR_BY_CHAT: dict[int, int] = {}
+
+
+async def sweep_chat_except(chat_id: int, anchor_message_id: int, keep_ids: set[int]):
+    """Удаляет сообщения в недавнем окне, кроме явно защищенных id."""
+    start = max(1, int(anchor_message_id) - CHAT_SWEEP_WINDOW)
+    end = max(start, int(anchor_message_id))
+    for mid in range(start, end + 1):
+        if mid in keep_ids:
+            continue
+        try:
+            await bot.delete_message(chat_id, mid)
+        except Exception:
+            pass
 
 
 class DeleteCallbackMessageMiddleware(BaseMiddleware):
@@ -46,6 +61,37 @@ class DeleteCallbackMessageMiddleware(BaseMiddleware):
 
 
 dp.callback_query.middleware(DeleteCallbackMessageMiddleware())
+
+
+class CleanupLastStepMessageOnUserInputMiddleware(BaseMiddleware):
+    """Перед обработкой входящего сообщения убирает последний сервисный шаг бота."""
+
+    async def __call__(self, handler, event: types.Message, data):
+        state = data.get("state")
+        if state and event.chat:
+            try:
+                st = await state.get_data()
+                last_msg_id = st.get("last_msg_id")
+                keep_last = bool(st.get("keep_last_msg"))
+                anchor_id = START_ANCHOR_BY_CHAT.get(int(event.chat.id))
+                if anchor_id and last_msg_id and int(last_msg_id) == int(anchor_id):
+                    keep_last = True
+                if last_msg_id and not keep_last:
+                    await bot.delete_message(event.chat.id, last_msg_id)
+                    await state.update_data(last_msg_id=None)
+            except Exception:
+                # Если удалить не удалось (уже удалено/нет прав), продолжаем без падения.
+                pass
+        result = await handler(event, data)
+        # Дополнительно подчищаем входящие сообщения пользователя.
+        try:
+            await event.delete()
+        except Exception:
+            pass
+        return result
+
+
+dp.message.middleware(CleanupLastStepMessageOnUserInputMiddleware())
 
 
 def db_connect():
@@ -798,11 +844,13 @@ async def send_step(m_obj, text, reply_markup=None, state: FSMContext = None):
         chat_id = m_obj.chat.id if hasattr(m_obj, 'chat') else m_obj.message.chat.id
         
         last_msg = None
+        keep_last = False
         if state is not None:
             data = await state.get_data()
             last_msg = data.get("last_msg_id")
+            keep_last = bool(data.get("keep_last_msg"))
         
-        if last_msg:
+        if last_msg and not keep_last:
             try:
                 await bot.delete_message(chat_id, last_msg)
             except Exception as e:
@@ -811,7 +859,15 @@ async def send_step(m_obj, text, reply_markup=None, state: FSMContext = None):
         
         new_msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode="HTML")
         if state is not None:
-            await state.update_data(last_msg_id=new_msg.message_id)
+            data = await state.get_data()
+            bot_counter = int(data.get("bot_msg_counter") or 0) + 1
+            start_msg_id = data.get("start_msg_id") or START_ANCHOR_BY_CHAT.get(int(chat_id))
+            await state.update_data(last_msg_id=new_msg.message_id, keep_last_msg=False, bot_msg_counter=bot_counter)
+            if bot_counter % 5 == 0:
+                keep_ids = {int(new_msg.message_id)}
+                if start_msg_id:
+                    keep_ids.add(int(start_msg_id))
+                await sweep_chat_except(chat_id, int(new_msg.message_id), keep_ids)
     except Exception as e:
         logging.error(f"Error in send_step: {e}")
         # Если что-то пошло не так, отправляем сообщение без удаления предыдущего
@@ -1061,11 +1117,15 @@ async def cmd_start(m: types.Message, state: FSMContext):
                 parse_mode="HTML",
             )
             return
-    await m.answer(
-        "📊 <b>Kapital Assets</b>\n\nВыберите, кто вы сейчас:",
-        reply_markup=role_select_kb(),
-        parse_mode="HTML",
+    start_msg = await m.answer("📊 Kapital Assets", reply_markup=role_select_kb())
+    START_ANCHOR_BY_CHAT[int(m.chat.id)] = int(start_msg.message_id)
+    await state.update_data(
+        last_msg_id=start_msg.message_id,
+        keep_last_msg=True,
+        start_msg_id=start_msg.message_id,
+        bot_msg_counter=0,
     )
+    await sweep_chat_except(m.chat.id, m.message_id, {int(start_msg.message_id)})
 
 
 @dp.message(F.text == BTN_ROLE_STAFF)
@@ -1084,10 +1144,11 @@ async def role_pick_staff(m: types.Message, state: FSMContext):
         )
         return
     await state.update_data(app_mode="staff")
-    await m.answer(
+    await send_step(
+        m,
         "👔 <b>Режим сотрудника</b>\nПубликация карточек и личный кабинет.",
         reply_markup=main_menu_kb(m.from_user.id),
-        parse_mode="HTML",
+        state=state,
     )
 
 
@@ -1208,17 +1269,18 @@ async def req_submit(c: types.CallbackQuery, state: FSMContext):
 @dp.message(F.text == BTN_ROLE_CLIENT)
 async def role_pick_client(m: types.Message, state: FSMContext):
     await state.update_data(app_mode="client")
-    await m.answer(
+    await send_step(
+        m,
         "🛒 <b>Режим клиента</b>\nНиже — поиск по объявлениям в канале (фильтры).",
         reply_markup=client_menu_kb(),
-        parse_mode="HTML",
+        state=state,
     )
 
 
 @dp.message(F.text == BTN_ROLE_SWITCH)
 async def role_switch(m: types.Message, state: FSMContext):
     await state.clear()
-    await m.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
+    await send_step(m, "Выберите режим:", reply_markup=role_select_kb(), state=state)
 
 
 @dp.message(F.text == BTN_SEARCH)
@@ -1885,7 +1947,7 @@ async def my_posts_tab(c: types.CallbackQuery, state: FSMContext):
             f"{extra}"
         )
         if tab_raw == POST_STATUS_PUBLISHED:
-            kb.button(text=f"🗑 Выбрать №{pid} для удаления", callback_data=f"my_post_delete_{pid}_{page}")
+            kb.button(text=f"🗑 Удалить публикацию №{pid}", callback_data=f"my_post_delete_{pid}_{page}")
 
     if page > 0:
         kb.button(text="⬅️ Назад", callback_data=f"my_posts_tab_{tab_raw}_{page - 1}")
@@ -1919,13 +1981,54 @@ async def my_post_delete_pick_reason(c: types.CallbackQuery, state: FSMContext):
     kb.button(text="⚠️ Ошибка", callback_data=f"my_post_reason_{post_id}_{REMOVE_REASON_ERROR}_{page}")
     kb.button(text="✏️ Исправление", callback_data=f"my_post_reason_{post_id}_{REMOVE_REASON_FIX}_{page}")
     kb.button(text="⬅️ Назад к активным", callback_data=f"my_posts_tab_published_{page}")
-    await send_step(c, f"Причина удаления объявления №<b>{post_id}</b>:", kb.adjust(1).as_markup(), state=state)
+    await send_step(c, f"Причина удаления публикации №<b>{post_id}</b>:", kb.adjust(1).as_markup(), state=state)
     await c.answer()
 
 
 @dp.callback_query(F.data.startswith("my_post_reason_"))
-async def my_post_delete_do(c: types.CallbackQuery, state: FSMContext):
+async def my_post_delete_confirm(c: types.CallbackQuery, state: FSMContext):
     payload = (c.data or "").replace("my_post_reason_", "", 1)
+    parts = payload.split("_")
+    if len(parts) < 3 or not parts[0].isdigit():
+        await c.answer("Некорректные данные", show_alert=True)
+        return
+    post_id = int(parts[0])
+    reason = parts[1]
+    page = int(parts[2]) if parts[2].isdigit() else 0
+    with db_connect() as conn:
+        post_row = conn.execute(
+            """SELECT category, realty_type, city, district, price_val, price_cur
+               FROM posts
+               WHERE id=? AND user_id=? AND COALESCE(status, 'published')='published'""",
+            (post_id, c.from_user.id),
+        ).fetchone()
+    if not post_row:
+        await c.answer("Объявление уже снято или не найдено.", show_alert=True)
+        return
+    cat, rtype, city, district, pval, pcur = post_row
+    price_h = _format_price_row(pval, pcur)
+    _, reason_label, _ = _remove_reason_meta(reason)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🗑 Да, удалить публикацию", callback_data=f"my_post_confirm_{post_id}_{reason}_{page}")
+    kb.button(text="⬅️ Отмена", callback_data=f"my_posts_tab_published_{page}")
+    await send_step(
+        c,
+        (
+            f"• <b>№{post_id}</b> {html.escape(cat or '')} / {html.escape(rtype or '')}\n"
+            f"  📍 {html.escape(city or '')}, {html.escape(district or '—')}\n"
+            f"  💰 {html.escape(price_h)}\n\n"
+            f"Подтвердите удаление публикации №<b>{post_id}</b>.\n"
+            f"Причина: <b>{reason_label}</b>."
+        ),
+        reply_markup=kb.adjust(1).as_markup(),
+        state=state,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data.startswith("my_post_confirm_"))
+async def my_post_delete_do(c: types.CallbackQuery, state: FSMContext):
+    payload = (c.data or "").replace("my_post_confirm_", "", 1)
     parts = payload.split("_")
     if len(parts) < 3 or not parts[0].isdigit():
         await c.answer("Некорректные данные", show_alert=True)
@@ -1991,7 +2094,7 @@ async def adm_logs(c: types.CallbackQuery, state: FSMContext):
     rows = fetch_logs_filtered(filters, limit=20)
     lines = ["📋 <b>Логи</b> (последние 20)\n"]
     if rows:
-        for rid, uid, action, details, ts in rows:
+        for rid, uid, action, details, ts in reversed(rows):
             lines.append(
                 f"• #{rid} | {ts}\n"
                 f"  user_id={uid} | {html.escape(str(action or ''))}\n"
@@ -2427,7 +2530,7 @@ async def _render_logs_with_filters(c: types.CallbackQuery, state: FSMContext, a
     rows = fetch_logs_filtered(filters, limit=20)
     lines = ["📋 <b>Логи</b> (последние 20)\n"]
     if rows:
-        for rid, uid, action, details, ts in rows:
+        for rid, uid, action, details, ts in reversed(rows):
             lines.append(
                 f"• #{rid} | {ts}\n"
                 f"  user_id={uid} | {html.escape(str(action or ''))}\n"
@@ -2513,7 +2616,7 @@ async def adm_logs_wait_uid(m: types.Message, state: FSMContext):
     rows = fetch_logs_filtered(filters, limit=20)
     lines = ["📋 <b>Логи</b> (последние 20)\n"]
     if rows:
-        for rid, uid, action, details, ts in rows:
+        for rid, uid, action, details, ts in reversed(rows):
             lines.append(
                 f"• #{rid} | {ts}\n"
                 f"  user_id={uid} | {html.escape(str(action or ''))}\n"
@@ -2698,7 +2801,17 @@ async def start_post(m: types.Message, state: FSMContext):
     if (await state.get_data()).get("app_mode") != "staff":
         await send_step(m, "Сначала выберите режим <b>«👔 Сотрудник»</b>.", reply_markup=role_select_kb(), state=state)
         return
-    
+
+    # При переходе из других сценариев (ЛК/удаление) удаляем последнее сервисное сообщение бота.
+    prev = await state.get_data()
+    prev_last_msg = prev.get("last_msg_id")
+    prev_keep_last = bool(prev.get("keep_last_msg"))
+    if prev_last_msg and not prev_keep_last:
+        try:
+            await bot.delete_message(m.chat.id, prev_last_msg)
+        except Exception:
+            pass
+
     await state.clear()
     await state.update_data(app_mode="staff")
     await state.set_state(PostState.category)
