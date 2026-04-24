@@ -380,6 +380,17 @@ def can_open_admin_panel(u_id: int) -> bool:
     return get_user_role(u_id) == "admin"
 
 
+def display_user_in_logs(user_id: int) -> str:
+    if int(user_id) == int(OWNER_ID):
+        return f"Владелец (ID {user_id})"
+    with db_connect() as conn:
+        row = conn.execute("SELECT name FROM users WHERE id=?", (user_id,)).fetchone()
+    name = (row[0] if row and row[0] else "").strip()
+    if name:
+        return f"{name} (ID {user_id})"
+    return f"ID {user_id}"
+
+
 def get_pending_access_request(user_id: int):
     with db_connect() as conn:
         return conn.execute(
@@ -1994,7 +2005,7 @@ async def adm_logs(c: types.CallbackQuery, state: FSMContext):
         for rid, uid, action, details, ts in rows:
             lines.append(
                 f"• #{rid} | {ts}\n"
-                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(display_user_in_logs(uid))} | {html.escape(str(action or ''))}\n"
                 f"  {html.escape(str(details or ''))}\n"
             )
     else:
@@ -2022,7 +2033,9 @@ async def export_logs(c: types.CallbackQuery, state: FSMContext):
     export_rows.extend(fetch_logs_for_export(filters, limit=5000))
     data = csv_bytes_from_rows(export_rows)
     file = BufferedInputFile(data, filename=f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-    await c.message.answer_document(file, caption="📤 Экспорт логов (CSV)")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="adm_logs")
+    await c.message.answer_document(file, caption="📤 Экспорт логов (CSV)", reply_markup=kb.adjust(1).as_markup())
     await c.answer()
 
 
@@ -2418,7 +2431,9 @@ async def export_logs_xlsx(c: types.CallbackQuery, state: FSMContext):
         await c.answer("Excel недоступен: установите openpyxl.", show_alert=True)
         return
     file = BufferedInputFile(data, filename=f"logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-    await c.message.answer_document(file, caption="📗 Экспорт логов (Excel)")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data="adm_logs")
+    await c.message.answer_document(file, caption="📗 Экспорт логов (Excel)", reply_markup=kb.adjust(1).as_markup())
     await c.answer()
 
 
@@ -2430,7 +2445,7 @@ async def _render_logs_with_filters(c: types.CallbackQuery, state: FSMContext, a
         for rid, uid, action, details, ts in rows:
             lines.append(
                 f"• #{rid} | {ts}\n"
-                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(display_user_in_logs(uid))} | {html.escape(str(action or ''))}\n"
                 f"  {html.escape(str(details or ''))}\n"
             )
     else:
@@ -2516,7 +2531,7 @@ async def adm_logs_wait_uid(m: types.Message, state: FSMContext):
         for rid, uid, action, details, ts in rows:
             lines.append(
                 f"• #{rid} | {ts}\n"
-                f"  user_id={uid} | {html.escape(str(action or ''))}\n"
+                f"  {html.escape(display_user_in_logs(uid))} | {html.escape(str(action or ''))}\n"
                 f"  {html.escape(str(details or ''))}\n"
             )
     else:
