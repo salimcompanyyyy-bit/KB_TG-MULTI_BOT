@@ -36,6 +36,7 @@ Scope: internal working memory for this repository.
 - Card separator length reduced from 32 to 24 symbols for a lighter visual look.
 - Auto-cleanup update (FSM-only): incoming messages are tracked via message middleware; every 2 bot messages cleanup runs over last 40 tracked IDs and keeps only 2 latest messages.
 - Auto-cleanup frequency updated: cleanup trigger changed from every 2 bot messages to every 5 bot messages.
+- Auto-cleanup trigger updated: cleanup now runs every 5 user button presses/messages (not by bot send count).
 
 ## Working Rules For Agent (EN)
 
@@ -100,6 +101,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Длина разделительных линий уменьшена (с 32 до 24 символов) для более легкого визуала.
   - Автоочистка обновлена (без БД): входящие сообщения трекаются middleware, каждые 2 сообщения бота запускается чистка последних 40 tracked-ID с сохранением только 2 последних сообщений.
   - Частота автоочистки изменена: запуск теперь каждые 5 сообщений бота (вместо 2).
+  - Триггер автоочистки изменен: запуск теперь каждые 5 нажатий/сообщений пользователя, а не по количеству сообщений бота.
 
 ### Рабочие правила для агента
 

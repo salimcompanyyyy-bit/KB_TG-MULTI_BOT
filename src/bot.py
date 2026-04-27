@@ -79,11 +79,11 @@ dp.callback_query.middleware(DeleteCallbackMessageMiddleware())
 CLEANUP_BOT_IDS_KEY = "cleanup_bot_message_ids"
 CLEANUP_USER_IDS_KEY = "cleanup_user_message_ids"
 CLEANUP_ORDER_IDS_KEY = "cleanup_order_message_ids"
-CLEANUP_BOT_COUNTER_KEY = "cleanup_bot_message_counter"
+CLEANUP_PRESS_COUNTER_KEY = "cleanup_press_counter"
 CLEANUP_MAX_IDS = 80
 AUTO_CLEANUP_WINDOW = 40
 AUTO_CLEANUP_KEEP_LAST = 2
-AUTO_CLEANUP_EVERY_BOT_MSGS = 5
+AUTO_CLEANUP_EVERY_BUTTON_PRESSES = 5
 
 
 async def _append_cleanup_id(state: FSMContext, key: str, message_id: int):
@@ -106,13 +106,20 @@ async def remember_cleanup_message(state: FSMContext, message: types.Message, is
 
 
 class TrackIncomingMessageMiddleware(BaseMiddleware):
-    """Сохраняет входящие сообщения пользователя для последующей автоочистки."""
+    """Сохраняет входящие и запускает автоочистку по счётчику нажатий."""
 
     async def __call__(self, handler, event: types.Message, data):
         state: FSMContext | None = data.get("state")
+        result = await handler(event, data)
         if state is not None:
             await remember_cleanup_message(state, event, is_user=True)
-        return await handler(event, data)
+            counter_data = await state.get_data()
+            press_counter = int(counter_data.get(CLEANUP_PRESS_COUNTER_KEY, 0)) + 1
+            if press_counter >= AUTO_CLEANUP_EVERY_BUTTON_PRESSES:
+                await auto_cleanup_recent_messages(event.chat.id, state)
+                press_counter = 0
+            await state.update_data(**{CLEANUP_PRESS_COUNTER_KEY: press_counter})
+        return result
 
 
 dp.message.middleware(TrackIncomingMessageMiddleware())
@@ -125,7 +132,7 @@ async def clear_state_preserve_cleanup(state: FSMContext):
         ids = data.get(key, [])
         if ids:
             keep[key] = ids
-    keep[CLEANUP_BOT_COUNTER_KEY] = data.get(CLEANUP_BOT_COUNTER_KEY, 0)
+    keep[CLEANUP_PRESS_COUNTER_KEY] = data.get(CLEANUP_PRESS_COUNTER_KEY, 0)
     last_msg_id = data.get("last_msg_id")
     if last_msg_id:
         keep["last_msg_id"] = last_msg_id
@@ -158,7 +165,7 @@ async def purge_cleanup_messages(
             CLEANUP_BOT_IDS_KEY: [],
             CLEANUP_USER_IDS_KEY: [],
             CLEANUP_ORDER_IDS_KEY: [],
-            CLEANUP_BOT_COUNTER_KEY: 0,
+            CLEANUP_PRESS_COUNTER_KEY: 0,
             "last_msg_id": None,
         }
     )
@@ -996,12 +1003,6 @@ async def send_step(m_obj, text, reply_markup=None, state: FSMContext = None):
         if state is not None:
             await state.update_data(last_msg_id=new_msg.message_id)
             await remember_cleanup_message(state, new_msg, is_user=False)
-            data_after_send = await state.get_data()
-            bot_counter = int(data_after_send.get(CLEANUP_BOT_COUNTER_KEY, 0)) + 1
-            if bot_counter >= AUTO_CLEANUP_EVERY_BOT_MSGS:
-                await auto_cleanup_recent_messages(chat_id, state)
-                bot_counter = 0
-            await state.update_data(**{CLEANUP_BOT_COUNTER_KEY: bot_counter})
     except Exception as e:
         logging.error(f"Error in send_step: {e}")
         # Если что-то пошло не так, отправляем сообщение без удаления предыдущего
@@ -1420,7 +1421,7 @@ async def role_pick_client(m: types.Message, state: FSMContext):
             CLEANUP_BOT_IDS_KEY: [],
             CLEANUP_USER_IDS_KEY: [],
             CLEANUP_ORDER_IDS_KEY: [],
-            CLEANUP_BOT_COUNTER_KEY: 0,
+            CLEANUP_PRESS_COUNTER_KEY: 0,
         }
     )
     await state.update_data(app_mode="client")
@@ -1439,7 +1440,7 @@ async def role_switch(m: types.Message, state: FSMContext):
             CLEANUP_BOT_IDS_KEY: [],
             CLEANUP_USER_IDS_KEY: [],
             CLEANUP_ORDER_IDS_KEY: [],
-            CLEANUP_BOT_COUNTER_KEY: 0,
+            CLEANUP_PRESS_COUNTER_KEY: 0,
         }
     )
     await m.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
@@ -1848,7 +1849,7 @@ async def profile_switch_mode(c: types.CallbackQuery, state: FSMContext):
             CLEANUP_BOT_IDS_KEY: [],
             CLEANUP_USER_IDS_KEY: [],
             CLEANUP_ORDER_IDS_KEY: [],
-            CLEANUP_BOT_COUNTER_KEY: 0,
+            CLEANUP_PRESS_COUNTER_KEY: 0,
         }
     )
     await c.message.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
