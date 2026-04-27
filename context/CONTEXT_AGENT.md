@@ -7,7 +7,7 @@ Scope: internal working memory for this repository.
 
 - **Run:** repo root — `python src/bot.py` or `scripts\run_bot.bat`. **Secrets:** root `.env` → `BOT_TOKEN` (not in Git).
 - **DB:** *Live* = `get_db_path()` in `src/db_path.py` — file **outside** the repo (default: `%LOCALAPPDATA%\KB_TG-MULTI_BOT\database.db`). *Git snapshot* = `data/database.db`. **Root** `database.db*` = junk / ignore / delete, **not** live. Don’t add `data/*.db` to `.gitignore` without agreement.
-- **Owner** (`OWNER_ID`): Admin → «База / импорт» = sync live ↔ `data/`. Also `scripts/*database*.py`.
+- **Owner** (`OWNER_ID`): Admin → «База / импорт» — кнопка «Текущая БД бота → data/» = перелив **live** в `data/database.db` (для `git add`); обратная кнопка = из `data/` в live. Скрипты `scripts/*database*.py` то же.
 
 ## Project Snapshot (EN)
 
@@ -61,7 +61,7 @@ Allowed commit types (and only these): `добавление`, `исправле
 
 - **Запуск** из **корня** репо: `python src/bot.py` или `scripts\run_bot.bat`. **Токен** — `BOT_TOKEN` в корневом `.env` (в Git не коммитим).
 - **Две БД:** **живая** — `get_db_path()` (`src/db_path.py`, по умолчанию **вне** папки проекта, `git checkout` её не трогает; опция `DB_PATH` в `.env`). **Снимок в Git** — только `data/database.db`. **Файлы `database.db*` в корне репо** — **мусор** (в `.gitignore`), с живой БД **не** связаны — можно удалить.
-- **Владелец** (`OWNER_ID`): админка → «База / импорт» — синхронизация live ↔ `data/`. Скрипты `scripts/*database*.py` — то же с диска. Без согласования не прятать `data/*.db` в `.gitignore`.
+- **Владелец** (`OWNER_ID`): «База / импорт» — **📤** копирует **текущую рабочую БД** в `data/database.db` (под commit); **📥** заливает `data/` в рабочую. `git` сам не вызывается. Скрипты `scripts/*database*.py` — то же. `data/*.db` в ignore не убирать без согласования.
 
 ### Снимок проекта
 

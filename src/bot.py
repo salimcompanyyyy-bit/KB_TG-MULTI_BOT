@@ -1043,11 +1043,11 @@ def build_admin_data_kb(user_id: int = 0):
     kb.button(text="📥 Импорт CSV", callback_data="adm_importcsv")
     if user_id and int(user_id) == int(OWNER_ID):
         kb.button(
-            text="📤 В data/ (снимок для Git)",
+            text="📤 Текущая БД бота → data/ (Git)",
             callback_data="adm_db_export",
         )
         kb.button(
-            text="📥 data/ → в рабочую БД",
+            text="📥 data/ (Git) → в рабочую БД",
             callback_data="adm_db_import_ask",
         )
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
@@ -1559,12 +1559,12 @@ async def adm_db_export(c: types.CallbackQuery, state: FSMContext):
         logging.exception("adm_db_export")
         await c.answer(f"Ошибка: {e}", show_alert=True)
         return
-    await c.answer("Снимок записан", show_alert=True)
+    await c.answer("Готово: бот → data/", show_alert=True)
     p = str(SNAPSHOT_DB).replace("\\", "/")
     await c.message.answer(
-        "✅ <b>Рабочая БД скопирована</b> в <code>data/database.db</code>.\n\n"
+        "✅ <b>Текущая рабочая БД бота</b> перелита в <code>data/database.db</code> (файл для Git).\n\n"
         f"<code>{html.escape(p)}</code>\n\n"
-        "Дальше при необходимости: <code>git add data/</code> и commit.",
+        "Сам Git не трогает: при необходимости <code>git add data/</code> и commit.",
         parse_mode="HTML",
     )
 
