@@ -1,6 +1,8 @@
 """Единая логика пути к живой БД: вне папки репозитория, чтобы git checkout не затирал данные.
 
 Перед вызовом get_db_path() вызывайте load_dotenv() (как в bot.py / скриптах).
+
+Снимок для Git: data/database.db (корень репозитория = на уровень выше src/).
 """
 from __future__ import annotations
 
@@ -9,8 +11,12 @@ import shutil
 import sys
 from pathlib import Path
 
-REPO_DIR = Path(__file__).resolve().parent
-LEGACY_DB = REPO_DIR / "database.db"
+# Корень репозитория (родитель каталога src/)
+REPO_DIR = Path(__file__).resolve().parent.parent
+# Снимок в репо для git push/pull
+SNAPSHOT_DB = REPO_DIR / "data" / "database.db"
+# Старая раскладка до вынесения в data/
+LEGACY_ROOT_DB = REPO_DIR / "database.db"
 
 
 def get_db_path() -> str:
@@ -31,11 +37,17 @@ def get_db_path() -> str:
     if ext.is_file():
         return str(ext)
 
-    if LEGACY_DB.is_file():
+    source: Path | None = None
+    if SNAPSHOT_DB.is_file():
+        source = SNAPSHOT_DB
+    elif LEGACY_ROOT_DB.is_file():
+        source = LEGACY_ROOT_DB
+
+    if source is not None:
         ext.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(LEGACY_DB, ext)
+        shutil.copy2(source, ext)
         for suffix in ("-wal", "-shm"):
-            src = Path(str(LEGACY_DB) + suffix)
+            src = Path(str(source) + suffix)
             if src.is_file():
                 shutil.copy2(src, Path(str(ext) + suffix))
         return str(ext)

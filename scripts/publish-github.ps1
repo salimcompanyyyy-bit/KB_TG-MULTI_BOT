@@ -1,7 +1,8 @@
 # Creates GitHub repo if missing, then pushes. First run opens browser for GitHub login.
 
 $ErrorActionPreference = "Continue"
-$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Скрипт лежит в scripts/; корень репозитория — на уровень выше
+$RepoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Set-Location -LiteralPath $RepoRoot
 
 $gh = "${env:ProgramFiles}\GitHub CLI\gh.exe"
@@ -31,10 +32,12 @@ if (-not $login) {
 $repoName = "KB_TG_nedvizhka_tg"
 $originUrl = "https://github.com/$login/$repoName.git"
 
-if (git remote get-url origin 2>$null) {
+if (git remote get-url github 2>$null) {
+    git remote set-url github $originUrl
+} elseif (git remote get-url origin 2>$null) {
     git remote set-url origin $originUrl
 } else {
-    git remote add origin $originUrl
+    git remote add github $originUrl
 }
 
 $viewErr = & $gh repo view "$login/$repoName" 2>&1
@@ -56,7 +59,9 @@ if (-not $branch) {
 }
 
 Write-Host "Pushing branch $branch..."
-git push -u origin $branch
+$pushRemote = "github"
+if (-not (git remote get-url github 2>$null)) { $pushRemote = "origin" }
+git push -u $pushRemote $branch
 if ($LASTEXITCODE -ne 0) {
     exit 1
 }

@@ -5,8 +5,9 @@ Scope: internal working memory for this repository.
 
 ## Project Snapshot (EN)
 
-- Stack: Python bot (`bot.py`) with SQLite; **Telegram bot token** is read from env `BOT_TOKEN` or a local `.env` file (see `.env.example`), never hardcoded in source.
-- **Two database roles:** (1) **live DB** path from `get_db_path()` in `db_path.py` — default is **outside the repo** (e.g. `%LOCALAPPDATA%\\KB_TG-MULTI_BOT\\database.db` on Windows) so `git checkout` / rollback does **not** overwrite working data; optional `DB_PATH` in `.env`. (2) **`database.db` in repo root** remains a **committed backup** for `git push` / `git pull` on other machines; after pull, apply to live with `python import_database_from_repo.py` (bot stopped). To publish the latest live DB into the repo before commit: `python export_database_to_repo.py` (bot stopped). Do not add backup DBs to `.gitignore` without explicit agreement.
+- **Layout:** `src/` — app code (`bot.py`, `db_path.py`); `data/` — **committed** SQLite snapshot (`data/database.db`) for backup/sharing; `scripts/` — run (`run_bot.bat`), DB import/export, `publish-github.*`; `context/`, `VERSION`, root `.env[.example]`, `requirements.txt`.
+- **Telegram bot token** is read from env `BOT_TOKEN` or a local `.env` in repo root (see `.env.example`), never hardcoded in source; entrypoint: `python src/bot.py` or `scripts\run_bot.bat`.
+- **Two database roles:** (1) **live DB** from `get_db_path()` in `src/db_path.py` — default **outside the repo** (e.g. `%LOCALAPPDATA%\\KB_TG-MULTI_BOT\\database.db` on Windows) so `git checkout` / rollback does **not** overwrite working data; optional `DB_PATH` in `.env`. (2) **`data/database.db` in Git** — backup; after `git pull` apply to live: `python scripts/import_database_to_repo.py` (bot stopped). To publish live → repo: `python scripts/export_database_to_repo.py` (bot stopped). Do not add `data/*.db` to `.gitignore` without explicit agreement.
 - Domain: Telegram real estate workflow (staff publishing + client-facing channel usage).
 - Active idea backlog source: `context/CONTEXT_ИДЕЙ.md`.
 - Current important behavior:
@@ -53,8 +54,9 @@ Allowed commit types (and only these): `добавление`, `исправле
 
 ### Снимок проекта
 
-- Стек: Python-бот (`bot.py`) + SQLite; **токен Telegram-бота** берётся из окружения `BOT_TOKEN` или локального `.env` (см. `.env.example`), в исходниках не хранится.
-- **Два уровня БД:** (1) **живая** — путь `get_db_path()` в `db_path.py` (по умолчанию **вне** папки репо, напр. `%LOCALAPPDATA%\\KB_TG-MULTI_BOT\\database.db` на Windows), чтобы `git checkout`/откат **не** затирал рабочие данные; при необходимости свой путь в `DB_PATH` в `.env`. (2) **`database.db` в корне репо** — **снимок в Git** (бэкап, обмен с другими клонами); не добавлять в `.gitignore` без согласования. После `git pull` при необходимости подтянуть снимок в живую копию: `python import_database_from_repo.py` (бот **остановлен**). Чтобы выгрузить актуальную живую БД в репо перед коммитом (бэкап на GitHub): `python export_database_to_repo.py` (бот **остановлен**).
+- **Структура:** `src/` — код бота (`bot.py`, `db_path.py`); `data/` — закоммиченный снимок SQLite (`data/database.db`); `scripts/` — `run_bot.bat`, импорт/экспорт БД, публикация в GitHub; `context/`, `VERSION`, корневой `.env` / `.env.example`, `requirements.txt`.
+- **Токен** — из `BOT_TOKEN` / `.env` в корне репо; запуск: `python src/bot.py` или `scripts\run_bot.bat`.
+- **Два уровня БД:** (1) **живая** — `get_db_path()` в `src/db_path.py` (по умолчанию **вне** репо, напр. `%LOCALAPPDATA%\\KB_TG-MULTI_BOT\\database.db`); при необходимости `DB_PATH` в `.env`. (2) **`data/database.db` в Git** — бэкап/обмен; после `git pull` → `python scripts/import_database_from_repo.py` (бот **остановлен**); выгрузка в репо: `python scripts/export_database_to_repo.py` (бот **остановлен**). В `.gitignore` снимок в `data/` не прятать без согласования.
 - Домен: Telegram-процесс по недвижимости (публикация сотрудниками + клиентский канал).
 - Актуальный бэклог идей: `context/CONTEXT_ИДЕЙ.md`.
 - Важные текущие моменты:

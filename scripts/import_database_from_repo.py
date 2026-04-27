@@ -1,37 +1,42 @@
 """
-Копирует database.db из корня репозитория в путь «живой» БД (get_db_path из db_path).
+Копирует data/database.db из репозитория в путь «живой» БД (get_db_path из src.db_path).
 
-Запускайте, остановив бота, чтобы подтянуть в рабочую копию снимок, пришедший с git pull.
+Запуск из корня репо: python scripts/import_database_from_repo.py
+Остановите бота заранее.
 """
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(REPO_ROOT / ".env")
 except ImportError:
     pass
 
-from db_path import REPO_DIR, get_db_path
+from db_path import REPO_DIR, get_db_path  # noqa: E402
 
 
 def main() -> None:
-    source = REPO_DIR / "database.db"
+    import shutil
+
+    source = REPO_DIR / "data" / "database.db"
     if not source.is_file():
-        print("В репозитории нет database.db. Сначала сделайте git pull / checkout.", file=sys.stderr)
+        print("Нет data/database.db. Сначала git pull / checkout.", file=sys.stderr)
         sys.exit(1)
     target = Path(get_db_path())
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)
     for suffix in ("-wal", "-shm"):
-        src = source.parent / (source.name + suffix)
+        src = Path(str(source) + suffix)
         if src.is_file():
-            shutil.copy2(src, target.parent / (target.name + suffix))
+            shutil.copy2(src, Path(str(target) + suffix))
         else:
             extra = target.parent / (target.name + suffix)
             if extra.is_file():

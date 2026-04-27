@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import logging
+from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timedelta
 from typing import Optional
@@ -18,10 +19,12 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(_REPO_ROOT / ".env")
 except ImportError:
     pass
 

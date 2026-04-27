@@ -10,7 +10,7 @@ __pycache__/
 .venv/
 venv/
 
-# Локальные БД (при необходимости ведёте вручную)
-# database.db
-# database.db-wal
-# database.db-shm
+# Случайные SQLite в корне репо (живая БД вне проекта; снимок — в data/)
+/database.db
+/database.db-wal
+/database.db-shm
