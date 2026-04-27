@@ -25,6 +25,8 @@ try:
 except ImportError:
     pass
 
+from db_path import get_db_path
+
 # --- КОНФИГ ---
 
 
@@ -40,7 +42,7 @@ def _env_token() -> str:
 API_TOKEN = _env_token()
 CHANNEL_ID = '@KapitalBank_Assets' 
 OWNER_ID = 120960192  
-DB_PATH = "database.db"
+DB_PATH = get_db_path()
 # Рамка карточки в канале (одинаковая длина во всех объявлениях)
 CARD_DECO_LINE = "━" * 32
 
