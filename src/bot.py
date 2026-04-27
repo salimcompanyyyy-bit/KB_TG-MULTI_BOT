@@ -3564,7 +3564,7 @@ def build_card_text(
     card_text = ""
     if listing_no is not None:
         card_text += f"🔢 <b>Объявление №{listing_no}</b>\n"
-    card_text += f"🏠 {category}\n"
+    card_text += f"🏠 {category}\n\n"
     card_text += f"🏙 Город: {city}\n"
     card_text += f"📍 Район: {district}\n"
     if street:
