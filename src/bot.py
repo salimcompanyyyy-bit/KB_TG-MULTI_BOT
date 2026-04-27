@@ -110,16 +110,9 @@ class TrackIncomingMessageMiddleware(BaseMiddleware):
 
     async def __call__(self, handler, event: types.Message, data):
         state: FSMContext | None = data.get("state")
-        result = await handler(event, data)
         if state is not None:
             await remember_cleanup_message(state, event, is_user=True)
-            counter_data = await state.get_data()
-            press_counter = int(counter_data.get(CLEANUP_PRESS_COUNTER_KEY, 0)) + 1
-            if press_counter >= AUTO_CLEANUP_EVERY_BUTTON_PRESSES:
-                await auto_cleanup_recent_messages(event.chat.id, state)
-                press_counter = 0
-            await state.update_data(**{CLEANUP_PRESS_COUNTER_KEY: press_counter})
-        return result
+        return await handler(event, data)
 
 
 dp.message.middleware(TrackIncomingMessageMiddleware())
@@ -1003,6 +996,12 @@ async def send_step(m_obj, text, reply_markup=None, state: FSMContext = None):
         if state is not None:
             await state.update_data(last_msg_id=new_msg.message_id)
             await remember_cleanup_message(state, new_msg, is_user=False)
+            counter_data = await state.get_data()
+            press_counter = int(counter_data.get(CLEANUP_PRESS_COUNTER_KEY, 0)) + 1
+            if press_counter >= AUTO_CLEANUP_EVERY_BUTTON_PRESSES:
+                await auto_cleanup_recent_messages(chat_id, state)
+                press_counter = 0
+            await state.update_data(**{CLEANUP_PRESS_COUNTER_KEY: press_counter})
     except Exception as e:
         logging.error(f"Error in send_step: {e}")
         # Если что-то пошло не так, отправляем сообщение без удаления предыдущего
