@@ -30,6 +30,7 @@ Scope: internal working memory for this repository.
 - Staff flow cleanup fix: profile/admin text triggers are now remembered in cleanup queue, so they are removed on "⬅️ Назад" together with staff-mode tail messages.
 - State-preserve fix: `clear_state_preserve_cleanup()` now keeps `last_msg_id`, so transient "Вы вернулись в главное меню" message is correctly removed on the next step.
 - /start greeting text simplified: removed line "Выберите, кто вы сейчас:", keeping only "📊 Kapital Assets" above role keyboard.
+- Card style restored to classic decorative layout (separator lines). Channel contact button remains removed from publication flow.
 
 ## Working Rules For Agent (EN)
 
@@ -88,6 +89,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Исправление: сообщения-триггеры «👤 Личный кабинет» и «⚙️ Админ-панель» теперь сохраняются в очередь и удаляются по нажатию «⬅️ Назад».
   - Исправление состояния: `clear_state_preserve_cleanup()` сохраняет `last_msg_id`, поэтому служебное сообщение «Вы вернулись в главное меню» удаляется следующим шагом корректно.
   - Стартовый текст `/start` упрощен: убрана строка «Выберите, кто вы сейчас:», оставлен только заголовок «📊 Kapital Assets» и клавиатура выбора режима.
+  - Формат карточки возвращен к классическому виду с разделителями; кнопка «Связаться» в канале остается отключенной.
 
 ### Рабочие правила для агента
 

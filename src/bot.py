@@ -3533,8 +3533,7 @@ def build_card_text(
     contact_phone: Optional[str] = None,
     contact_tg: Optional[str] = None,
 ) -> str:
-    """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts).
-    contact_phone / contact_tg — из профиля сотрудника (tg без @). Поля экранируются под parse_mode=HTML."""
+    """Единый рендер карточки (для превью и публикации). listing_no — номер объявления (= id в posts)."""
     category = html.escape(str(data.get('category') or ''))
     realty_type = html.escape(str(data.get('realty_type') or ''))
     city = html.escape(str(data.get('city') or ''))
@@ -3582,17 +3581,15 @@ def build_card_text(
     card_text += sep
     if price_text:
         card_text += f"{price_text}\n{sep}"
-    # Контакт: 1) ФИО, 2) телефон и @username
     card_text += f"{emp}\n"
-    line2: list[str] = []
+    contacts: list[str] = []
     if contact_phone and str(contact_phone).strip():
-        line2.append(html.escape(str(contact_phone).strip()))
+        contacts.append(f"<code>{html.escape(str(contact_phone).strip())}</code>")
     if contact_tg and str(contact_tg).strip():
         u = str(contact_tg).strip().lstrip("@")
-        # <code> без ссылки на t.me — иначе в канале появляется большая превью-плашка профиля
-        line2.append(f"<code>@{html.escape(u)}</code>")
-    if line2:
-        card_text += " ".join(line2) + "\n"
+        contacts.append(f"@{html.escape(u)}")
+    if contacts:
+        card_text += " ".join(contacts) + "\n"
     card_text += dbl.rstrip("\n")
     return card_text
 
@@ -3662,12 +3659,7 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
             contact_phone=c_phone,
             contact_tg=c_tg,
         )
-        contact_url = employee_contact_url(c_tg, post_id)
         contact_kb = None
-        if contact_url:
-            kb_contact = InlineKeyboardBuilder()
-            kb_contact.button(text=f"💬 Написать по №{post_id}", url=contact_url)
-            contact_kb = kb_contact.adjust(1).as_markup()
         media_type = data.get('media_type')
         media_files = data.get('media_files', [])
         sent_msg = None
@@ -3703,13 +3695,6 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
                     media_group.append(media)
                 sent = await bot.send_media_group(CHANNEL_ID, media_group)
                 sent_msg = sent[0] if sent else None
-                if sent_msg and contact_kb:
-                    await bot.send_message(
-                        CHANNEL_ID,
-                        f"💬 Связаться с сотрудником по объявлению №{post_id}",
-                        reply_markup=contact_kb,
-                        reply_to_message_id=sent_msg.message_id,
-                    )
         else:
             sent_msg = await bot.send_message(
                 CHANNEL_ID,
