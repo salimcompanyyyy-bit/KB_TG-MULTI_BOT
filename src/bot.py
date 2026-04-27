@@ -76,6 +76,68 @@ class DeleteCallbackMessageMiddleware(BaseMiddleware):
 
 dp.callback_query.middleware(DeleteCallbackMessageMiddleware())
 
+CLEANUP_BOT_IDS_KEY = "cleanup_bot_message_ids"
+CLEANUP_USER_IDS_KEY = "cleanup_user_message_ids"
+CLEANUP_MAX_IDS = 80
+
+
+async def _append_cleanup_id(state: FSMContext, key: str, message_id: int):
+    data = await state.get_data()
+    ids = data.get(key, [])
+    if message_id in ids:
+        return
+    ids.append(message_id)
+    if len(ids) > CLEANUP_MAX_IDS:
+        ids = ids[-CLEANUP_MAX_IDS:]
+    await state.update_data(**{key: ids})
+
+
+async def remember_cleanup_message(state: FSMContext, message: types.Message, is_user: bool = False):
+    if state is None or message is None:
+        return
+    key = CLEANUP_USER_IDS_KEY if is_user else CLEANUP_BOT_IDS_KEY
+    await _append_cleanup_id(state, key, message.message_id)
+
+
+async def clear_state_preserve_cleanup(state: FSMContext):
+    data = await state.get_data()
+    keep = {}
+    for key in (CLEANUP_BOT_IDS_KEY, CLEANUP_USER_IDS_KEY):
+        ids = data.get(key, [])
+        if ids:
+            keep[key] = ids
+    await state.clear()
+    if keep:
+        await state.update_data(**keep)
+
+
+async def purge_cleanup_messages(
+    *,
+    chat_id: int,
+    state: FSMContext,
+    try_delete_user_messages: bool = True,
+):
+    data = await state.get_data()
+    bot_ids = list(data.get(CLEANUP_BOT_IDS_KEY, []))
+    user_ids = list(data.get(CLEANUP_USER_IDS_KEY, [])) if try_delete_user_messages else []
+    last_msg_id = data.get("last_msg_id")
+    if last_msg_id:
+        bot_ids.append(last_msg_id)
+
+    for msg_id in sorted(set(bot_ids + user_ids)):
+        try:
+            await bot.delete_message(chat_id, msg_id)
+        except Exception as e:
+            logging.debug("cleanup skip delete_message chat=%s message=%s: %s", chat_id, msg_id, e)
+
+    await state.update_data(
+        **{
+            CLEANUP_BOT_IDS_KEY: [],
+            CLEANUP_USER_IDS_KEY: [],
+            "last_msg_id": None,
+        }
+    )
+
 
 def db_connect():
     """Единая точка подключения к SQLite с таймаутом на конкуренцию."""
@@ -1118,7 +1180,7 @@ async def cmd_start(m: types.Message, state: FSMContext):
             )
             return
     await m.answer(
-        "📊 <b>Kapital Assets</b>\n\nВыберите, кто вы сейчас:",
+        "📊 <b>Kapital Assets</b>",
         reply_markup=role_select_kb(),
         parse_mode="HTML",
     )
@@ -1140,11 +1202,13 @@ async def role_pick_staff(m: types.Message, state: FSMContext):
         )
         return
     await state.update_data(app_mode="staff")
-    await m.answer(
+    await remember_cleanup_message(state, m, is_user=True)
+    sent = await m.answer(
         "👔 <b>Режим сотрудника</b>\nПубликация карточек и личный кабинет.",
         reply_markup=main_menu_kb(m.from_user.id),
         parse_mode="HTML",
     )
+    await remember_cleanup_message(state, sent, is_user=False)
 
 
 @dp.callback_query(F.data == "req_cancel")
@@ -1263,6 +1327,7 @@ async def req_submit(c: types.CallbackQuery, state: FSMContext):
 
 @dp.message(F.text == BTN_ROLE_CLIENT)
 async def role_pick_client(m: types.Message, state: FSMContext):
+    await state.update_data(**{CLEANUP_BOT_IDS_KEY: [], CLEANUP_USER_IDS_KEY: []})
     await state.update_data(app_mode="client")
     await m.answer(
         "🛒 <b>Режим клиента</b>\nНиже — поиск по объявлениям в канале (фильтры).",
@@ -1273,7 +1338,8 @@ async def role_pick_client(m: types.Message, state: FSMContext):
 
 @dp.message(F.text == BTN_ROLE_SWITCH)
 async def role_switch(m: types.Message, state: FSMContext):
-    await state.clear()
+    await clear_state_preserve_cleanup(state)
+    await state.update_data(**{CLEANUP_BOT_IDS_KEY: [], CLEANUP_USER_IDS_KEY: []})
     await m.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
 
 
@@ -1501,7 +1567,8 @@ async def admin_panel(m: types.Message, state: FSMContext):
     if not can_open_admin_panel(m.from_user.id):
         await m.answer("Нет доступа к админ-панели.")
         return
-    await state.clear()
+    await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
+    await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode="staff")
     await send_step(m, "⚙️ <b>Панель администратора</b>", build_admin_panel_kb(), state)
 
@@ -1665,14 +1732,16 @@ async def profile_handler(m: types.Message, state: FSMContext):
         )
         return
     prev = (await state.get_data()).get("app_mode", "staff")
-    await state.clear()
+    await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
+    await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode=prev)
     await send_profile_screen(m, m.from_user.id, state)
 
 
 @dp.callback_query(F.data == "profile_switch_mode")
 async def profile_switch_mode(c: types.CallbackQuery, state: FSMContext):
-    await state.clear()
+    await clear_state_preserve_cleanup(state)
+    await state.update_data(**{CLEANUP_BOT_IDS_KEY: [], CLEANUP_USER_IDS_KEY: []})
     await c.message.answer("Выберите режим:", reply_markup=role_select_kb(), parse_mode="HTML")
     await c.answer()
 
@@ -2841,8 +2910,9 @@ async def start_post(m: types.Message, state: FSMContext):
     if (await state.get_data()).get("app_mode") != "staff":
         await send_step(m, "Сначала выберите режим <b>«👔 Сотрудник»</b>.", reply_markup=role_select_kb(), state=state)
         return
-    
-    await state.clear()
+
+    await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
+    await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode="staff")
     await state.set_state(PostState.category)
     kb = InlineKeyboardBuilder()

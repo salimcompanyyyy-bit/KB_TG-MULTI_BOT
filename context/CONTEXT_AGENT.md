@@ -25,6 +25,8 @@ Scope: internal working memory for this repository.
   - Staff section UI was expanded: overview counters, stricter admin-only access, and request priority flag with moderation sorting.
   - Admin reports/search are now live: stats dashboard, logs with filters, CSV/XLSX export, post search by ad number and staff ID.
   - Channel posts now include quick contact button to employee with prefilled message containing listing number.
+- Staff flow cleanup: when user presses "➕ Создать карточку объекта", "👤 Личный кабинет", or "⚙️ Админ-панель", bot now attempts to delete accumulated staff-mode chat noise (bot messages guaranteed; user messages best-effort due Telegram limits).
+- /start greeting text simplified: removed line "Выберите, кто вы сейчас:", keeping only "📊 Kapital Assets" above role keyboard.
 
 ## Working Rules For Agent (EN)
 
@@ -78,6 +80,8 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Окно «Сотрудники» расширено: сводные счетчики, строгий доступ только админам и приоритет заявок с сортировкой для модерации.
   - Блок админ-отчетов и поиска работает: статистика, логи с фильтрами, экспорт CSV/XLSX, поиск публикаций по № и ID сотрудника.
   - В постах канала добавлена кнопка быстрого контакта с сотрудником с автотекстом по номеру объявления.
+  - При нажатии «➕ Создать карточку объекта», «👤 Личный кабинет» или «⚙️ Админ-панель» бот чистит накопленные сообщения режима сотрудника (сообщения бота — гарантированно, сообщения пользователя — попытка удаления с учетом ограничений Telegram).
+  - Стартовый текст `/start` упрощен: убрана строка «Выберите, кто вы сейчас:», оставлен только заголовок «📊 Kapital Assets» и клавиатура выбора режима.
 
 ### Рабочие правила для агента
 
