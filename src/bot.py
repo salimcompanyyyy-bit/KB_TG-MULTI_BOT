@@ -3559,13 +3559,12 @@ def build_card_text(
     price_text = f"💰 ЦЕНА: {price_val:,} {price_cur}".replace(",", " ") if price_val and price_cur else ""
     desc_text = f"📝 Детали: {desc}" if desc else ""
 
-    dbl = f"{CARD_DECO_LINE}\n{CARD_DECO_LINE}\n"
     sep = f"{CARD_DECO_LINE}\n"
 
-    card_text = dbl
+    card_text = ""
     if listing_no is not None:
-        card_text += f"🔢 <b>Объявление №{listing_no}</b>\n{sep}"
-    card_text += f"🏠 {category}\n{sep}"
+        card_text += f"🔢 <b>Объявление №{listing_no}</b>\n"
+    card_text += f"🏠 {category}\n"
     card_text += f"🏙 Город: {city}\n"
     card_text += f"📍 Район: {district}\n"
     if street:
@@ -3590,7 +3589,7 @@ def build_card_text(
         contacts.append(f"@{html.escape(u)}")
     if contacts:
         card_text += " ".join(contacts) + "\n"
-    card_text += dbl.rstrip("\n")
+    card_text += sep.rstrip("\n")
     return card_text
 
 

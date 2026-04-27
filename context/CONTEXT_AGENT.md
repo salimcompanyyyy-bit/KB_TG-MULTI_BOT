@@ -31,6 +31,7 @@ Scope: internal working memory for this repository.
 - State-preserve fix: `clear_state_preserve_cleanup()` now keeps `last_msg_id`, so transient "Вы вернулись в главное меню" message is correctly removed on the next step.
 - /start greeting text simplified: removed line "Выберите, кто вы сейчас:", keeping only "📊 Kapital Assets" above role keyboard.
 - Card style restored to classic decorative layout (separator lines). Channel contact button remains removed from publication flow.
+- Card decoration tuned down (medium): fewer separator lines retained only for key section breaks.
 
 ## Working Rules For Agent (EN)
 
@@ -90,6 +91,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Исправление состояния: `clear_state_preserve_cleanup()` сохраняет `last_msg_id`, поэтому служебное сообщение «Вы вернулись в главное меню» удаляется следующим шагом корректно.
   - Стартовый текст `/start` упрощен: убрана строка «Выберите, кто вы сейчас:», оставлен только заголовок «📊 Kapital Assets» и клавиатура выбора режима.
   - Формат карточки возвращен к классическому виду с разделителями; кнопка «Связаться» в канале остается отключенной.
+  - Разделители в карточке уменьшены до умеренного уровня: оставлены только ключевые линии между блоками.
 
 ### Рабочие правила для агента
 
