@@ -83,7 +83,7 @@ CLEANUP_BOT_COUNTER_KEY = "cleanup_bot_message_counter"
 CLEANUP_MAX_IDS = 80
 AUTO_CLEANUP_WINDOW = 40
 AUTO_CLEANUP_KEEP_LAST = 2
-AUTO_CLEANUP_EVERY_BOT_MSGS = 2
+AUTO_CLEANUP_EVERY_BOT_MSGS = 5
 
 
 async def _append_cleanup_id(state: FSMContext, key: str, message_id: int):
