@@ -106,6 +106,9 @@ async def clear_state_preserve_cleanup(state: FSMContext):
         ids = data.get(key, [])
         if ids:
             keep[key] = ids
+    last_msg_id = data.get("last_msg_id")
+    if last_msg_id:
+        keep["last_msg_id"] = last_msg_id
     await state.clear()
     if keep:
         await state.update_data(**keep)
@@ -137,6 +140,26 @@ async def purge_cleanup_messages(
             "last_msg_id": None,
         }
     )
+
+
+async def try_delete_trigger_message(message: types.Message):
+    """Пытается убрать текущее текстовое сообщение-кнопку пользователя."""
+    if message is None:
+        return
+    try:
+        await message.delete()
+        return
+    except Exception:
+        pass
+    try:
+        await bot.delete_message(message.chat.id, message.message_id)
+    except Exception as e:
+        logging.debug(
+            "cleanup skip trigger delete chat=%s message=%s: %s",
+            message.chat.id,
+            message.message_id,
+            e,
+        )
 
 
 def db_connect():
@@ -1567,7 +1590,7 @@ async def admin_panel(m: types.Message, state: FSMContext):
     if not can_open_admin_panel(m.from_user.id):
         await m.answer("Нет доступа к админ-панели.")
         return
-    await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
+    await remember_cleanup_message(state, m, is_user=True)
     await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode="staff")
     await send_step(m, "⚙️ <b>Панель администратора</b>", build_admin_panel_kb(), state)
@@ -1732,7 +1755,7 @@ async def profile_handler(m: types.Message, state: FSMContext):
         )
         return
     prev = (await state.get_data()).get("app_mode", "staff")
-    await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
+    await remember_cleanup_message(state, m, is_user=True)
     await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode=prev)
     await send_profile_screen(m, m.from_user.id, state)
@@ -2911,6 +2934,7 @@ async def start_post(m: types.Message, state: FSMContext):
         await send_step(m, "Сначала выберите режим <b>«👔 Сотрудник»</b>.", reply_markup=role_select_kb(), state=state)
         return
 
+    await try_delete_trigger_message(m)
     await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
     await clear_state_preserve_cleanup(state)
     await state.update_data(app_mode="staff")
@@ -3767,6 +3791,12 @@ async def back_to_city(c: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "go_back")
 async def go_back(c: types.CallbackQuery, state: FSMContext):
     mode = (await state.get_data()).get("app_mode", "staff")
+    if mode != "client":
+        await purge_cleanup_messages(
+            chat_id=c.message.chat.id,
+            state=state,
+            try_delete_user_messages=True,
+        )
     await state.clear()
     if mode == "client":
         await state.update_data(app_mode="client")

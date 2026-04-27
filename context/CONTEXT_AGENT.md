@@ -26,6 +26,9 @@ Scope: internal working memory for this repository.
   - Admin reports/search are now live: stats dashboard, logs with filters, CSV/XLSX export, post search by ad number and staff ID.
   - Channel posts now include quick contact button to employee with prefilled message containing listing number.
 - Staff flow cleanup: when user presses "➕ Создать карточку объекта", "👤 Личный кабинет", or "⚙️ Админ-панель", bot now attempts to delete accumulated staff-mode chat noise (bot messages guaranteed; user messages best-effort due Telegram limits).
+- Staff flow cleanup detail: for profile/admin flows cleanup is deferred to "⬅️ Назад" callback (then return to main menu), instead of deleting trigger message on entry.
+- Staff flow cleanup fix: profile/admin text triggers are now remembered in cleanup queue, so they are removed on "⬅️ Назад" together with staff-mode tail messages.
+- State-preserve fix: `clear_state_preserve_cleanup()` now keeps `last_msg_id`, so transient "Вы вернулись в главное меню" message is correctly removed on the next step.
 - /start greeting text simplified: removed line "Выберите, кто вы сейчас:", keeping only "📊 Kapital Assets" above role keyboard.
 
 ## Working Rules For Agent (EN)
@@ -81,6 +84,9 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Блок админ-отчетов и поиска работает: статистика, логи с фильтрами, экспорт CSV/XLSX, поиск публикаций по № и ID сотрудника.
   - В постах канала добавлена кнопка быстрого контакта с сотрудником с автотекстом по номеру объявления.
   - При нажатии «➕ Создать карточку объекта», «👤 Личный кабинет» или «⚙️ Админ-панель» бот чистит накопленные сообщения режима сотрудника (сообщения бота — гарантированно, сообщения пользователя — попытка удаления с учетом ограничений Telegram).
+  - Деталь очистки: в сценариях личного кабинета/админки очистка перенесена на нажатие «⬅️ Назад», после чего бот возвращает в главное меню.
+  - Исправление: сообщения-триггеры «👤 Личный кабинет» и «⚙️ Админ-панель» теперь сохраняются в очередь и удаляются по нажатию «⬅️ Назад».
+  - Исправление состояния: `clear_state_preserve_cleanup()` сохраняет `last_msg_id`, поэтому служебное сообщение «Вы вернулись в главное меню» удаляется следующим шагом корректно.
   - Стартовый текст `/start` упрощен: убрана строка «Выберите, кто вы сейчас:», оставлен только заголовок «📊 Kapital Assets» и клавиатура выбора режима.
 
 ### Рабочие правила для агента
