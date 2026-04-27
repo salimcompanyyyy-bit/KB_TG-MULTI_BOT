@@ -165,13 +165,12 @@ async def purge_cleanup_messages(
 
 
 async def auto_cleanup_recent_messages(chat_id: int, state: FSMContext):
-    """Оставляет только последние сообщения в tracked-окне (без БД)."""
+    """Оставляет только последние сообщения в tracked-окне + добивает хвост по диапазону ID."""
     data = await state.get_data()
     order = list(data.get(CLEANUP_ORDER_IDS_KEY, []))
-    if not order:
-        return
     bot_ids = set(data.get(CLEANUP_BOT_IDS_KEY, []))
     user_ids = set(data.get(CLEANUP_USER_IDS_KEY, []))
+    last_msg_id = data.get("last_msg_id")
 
     # Учитываем только последние AUTO_CLEANUP_WINDOW сообщений и сохраняем порядок.
     uniq_order: list[int] = []
@@ -182,13 +181,26 @@ async def auto_cleanup_recent_messages(chat_id: int, state: FSMContext):
         seen.add(msg_id)
         uniq_order.append(msg_id)
 
-    keep_ids = set(uniq_order[-AUTO_CLEANUP_KEEP_LAST:])
+    keep_ids = set(uniq_order[-AUTO_CLEANUP_KEEP_LAST:]) if uniq_order else set()
     delete_ids = [msg_id for msg_id in uniq_order if msg_id not in keep_ids]
     for msg_id in delete_ids:
         try:
             await bot.delete_message(chat_id, msg_id)
         except Exception as e:
             logging.debug("auto-cleanup skip delete chat=%s message=%s: %s", chat_id, msg_id, e)
+
+    # Страховка: чистим диапазон последних ID, чтобы удалять и нетрекнутые сообщения.
+    latest_id = max([last_msg_id or 0, *uniq_order]) if (last_msg_id or uniq_order) else 0
+    if latest_id > 0:
+        floor_id = max(1, latest_id - AUTO_CLEANUP_WINDOW + 1)
+        keep_floor = max(1, latest_id - AUTO_CLEANUP_KEEP_LAST + 1)
+        for msg_id in range(floor_id, keep_floor):
+            if msg_id in keep_ids:
+                continue
+            try:
+                await bot.delete_message(chat_id, msg_id)
+            except Exception as e:
+                logging.debug("auto-cleanup range skip chat=%s message=%s: %s", chat_id, msg_id, e)
 
     remain_order = [msg_id for msg_id in uniq_order if msg_id in keep_ids]
     await state.update_data(

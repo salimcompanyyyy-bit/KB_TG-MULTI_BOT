@@ -38,6 +38,7 @@ Scope: internal working memory for this repository.
 - Auto-cleanup frequency updated: cleanup trigger changed from every 2 bot messages to every 5 bot messages.
 - Auto-cleanup trigger updated: cleanup now runs every 5 user button presses/messages (not by bot send count).
 - Auto-cleanup reliability fix: trigger counter moved to `send_step` (every bot step), while middleware only tracks incoming user messages.
+- Auto-cleanup hardening: added fallback range cleanup by recent message_id window to remove untracked leftovers when tracked queue misses messages.
 
 ## Working Rules For Agent (EN)
 
@@ -104,6 +105,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Частота автоочистки изменена: запуск теперь каждые 5 сообщений бота (вместо 2).
   - Триггер автоочистки изменен: запуск теперь каждые 5 нажатий/сообщений пользователя, а не по количеству сообщений бота.
   - Для надежности счетчик триггера перенесен в `send_step` (каждый шаг ответа бота), middleware оставлен только для трекинга входящих сообщений.
+  - Усиление автоочистки: добавлена страховочная чистка по диапазону последних message_id, чтобы убирать нетрекнутые хвосты.
 
 ### Рабочие правила для агента
 
