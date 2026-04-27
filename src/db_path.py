@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -54,3 +55,52 @@ def get_db_path() -> str:
 
     ext.parent.mkdir(parents=True, exist_ok=True)
     return str(ext)
+
+
+def export_live_to_repo_snapshot() -> None:
+    """
+    Снимок текущей рабочей БД в data/database.db (для дальнейшего git add).
+    Онлайн-копия через API SQLite copy (лучше, чем копировать файл при WAL).
+    """
+    live_path = get_db_path()
+    SNAPSHOT_DB.parent.mkdir(parents=True, exist_ok=True)
+    live = sqlite3.connect(live_path, timeout=30.0)
+    try:
+        live.execute("PRAGMA busy_timeout=30000")
+        dest = sqlite3.connect(str(SNAPSHOT_DB), timeout=30.0)
+        try:
+            dest.execute("PRAGMA busy_timeout=30000")
+            with dest:
+                live.backup(dest, pages=10)
+        finally:
+            dest.close()
+    finally:
+        live.close()
+    for suffix in ("-wal", "-shm"):
+        w = Path(str(SNAPSHOT_DB) + suffix)
+        if w.is_file():
+            try:
+                w.unlink()
+            except OSError:
+                pass
+
+
+def import_repo_snapshot_to_live() -> None:
+    """
+    Заменить рабочую БД содержимым data/database.db (тот же механизм backup).
+    """
+    if not SNAPSHOT_DB.is_file():
+        raise FileNotFoundError("Нет data/database.db в репозитории.")
+    live_path = get_db_path()
+    src = sqlite3.connect(str(SNAPSHOT_DB), timeout=30.0)
+    try:
+        src.execute("PRAGMA busy_timeout=30000")
+        dest = sqlite3.connect(live_path, timeout=30.0)
+        try:
+            dest.execute("PRAGMA busy_timeout=30000")
+            with dest:
+                src.backup(dest, pages=10)
+        finally:
+            dest.close()
+    finally:
+        src.close()

@@ -28,7 +28,12 @@ try:
 except ImportError:
     pass
 
-from db_path import get_db_path
+from db_path import (
+    SNAPSHOT_DB,
+    export_live_to_repo_snapshot,
+    get_db_path,
+    import_repo_snapshot_to_live,
+)
 
 # --- КОНФИГ ---
 
@@ -1032,11 +1037,27 @@ def build_request_submit_kb():
     return kb.adjust(1).as_markup()
 
 
-def build_admin_data_kb():
+def build_admin_data_kb(user_id: int = 0):
     kb = InlineKeyboardBuilder()
     kb.button(text="🗄 DB check", callback_data="adm_dbcheck")
     kb.button(text="📥 Импорт CSV", callback_data="adm_importcsv")
+    if user_id and int(user_id) == int(OWNER_ID):
+        kb.button(
+            text="📤 В data/ (снимок для Git)",
+            callback_data="adm_db_export",
+        )
+        kb.button(
+            text="📥 data/ → в рабочую БД",
+            callback_data="adm_db_import_ask",
+        )
     kb.button(text="⬅️ Назад", callback_data="back_to_admin")
+    return kb.adjust(1).as_markup()
+
+
+def build_db_import_confirm_kb():
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Да, заменить рабочую БД", callback_data="adm_db_import_yes")
+    kb.button(text="❌ Отмена", callback_data="adm_db_import_no")
     return kb.adjust(1).as_markup()
 
 
@@ -1515,8 +1536,91 @@ async def adm_menu_staff(c: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_menu_data")
 async def adm_menu_data(c: types.CallbackQuery, state: FSMContext):
-    await send_step(c, "🗄 <b>Раздел: База / импорт</b>", build_admin_data_kb(), state=state)
+    if not can_open_admin_panel(c.from_user.id):
+        await c.answer("Нет доступа.", show_alert=True)
+        return
+    await send_step(
+        c,
+        "🗄 <b>Раздел: База / импорт</b>",
+        build_admin_data_kb(c.from_user.id),
+        state=state,
+    )
     await c.answer()
+
+
+@dp.callback_query(F.data == "adm_db_export")
+async def adm_db_export(c: types.CallbackQuery, state: FSMContext):
+    if int(c.from_user.id) != int(OWNER_ID):
+        await c.answer("Только для владельца бота.", show_alert=True)
+        return
+    try:
+        export_live_to_repo_snapshot()
+    except Exception as e:
+        logging.exception("adm_db_export")
+        await c.answer(f"Ошибка: {e}", show_alert=True)
+        return
+    await c.answer("Снимок записан", show_alert=True)
+    p = str(SNAPSHOT_DB).replace("\\", "/")
+    await c.message.answer(
+        "✅ <b>Рабочая БД скопирована</b> в <code>data/database.db</code>.\n\n"
+        f"<code>{html.escape(p)}</code>\n\n"
+        "Дальше при необходимости: <code>git add data/</code> и commit.",
+        parse_mode="HTML",
+    )
+
+
+@dp.callback_query(F.data == "adm_db_import_ask")
+async def adm_db_import_ask(c: types.CallbackQuery, state: FSMContext):
+    if int(c.from_user.id) != int(OWNER_ID):
+        await c.answer("Только для владельца бота.", show_alert=True)
+        return
+    if not SNAPSHOT_DB.is_file():
+        await c.answer("Нет data/database.db", show_alert=True)
+        return
+    await send_step(
+        c,
+        "⚠️ <b>Импорт снимка из data/database.db</b>\n\n"
+        "Текущая <b>рабочая</b> база будет <b>полностью заменена</b> содержимым файла из репозитория.\n\n"
+        "Продолжить?",
+        build_db_import_confirm_kb(),
+        state=state,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "adm_db_import_no")
+async def adm_db_import_no(c: types.CallbackQuery, state: FSMContext):
+    await send_step(
+        c,
+        "🗄 <b>Раздел: База / импорт</b>",
+        build_admin_data_kb(c.from_user.id),
+        state=state,
+    )
+    await c.answer()
+
+
+@dp.callback_query(F.data == "adm_db_import_yes")
+async def adm_db_import_yes(c: types.CallbackQuery, state: FSMContext):
+    if int(c.from_user.id) != int(OWNER_ID):
+        await c.answer("Только для владельца бота.", show_alert=True)
+        return
+    if not SNAPSHOT_DB.is_file():
+        await c.answer("Нет data/database.db", show_alert=True)
+        return
+    try:
+        import_repo_snapshot_to_live()
+    except Exception as e:
+        logging.exception("adm_db_import_yes")
+        await c.answer(f"Ошибка: {e}", show_alert=True)
+        return
+    await c.answer("Рабочая БД обновлена", show_alert=True)
+    await send_step(
+        c,
+        "✅ <b>Рабочая БД обновлена</b> из <code>data/database.db</code>.\n\n"
+        "Если бот вёл себя странно, при тяжёлой нагрузке — перезапустите процесс бота.",
+        build_admin_data_kb(c.from_user.id),
+        state=state,
+    )
 
 
 @dp.callback_query(F.data == "adm_menu_service")
