@@ -1,5 +1,5 @@
 """
-Копирует data/database.db из репозитория в путь «живой» БД (get_db_path из src.db_path).
+Копирует data/database.db в путь «живой» БД (get_db_path в src/db_path.py).
 
 Запуск из корня репо: python scripts/import_database_from_repo.py
 Остановите бота заранее.

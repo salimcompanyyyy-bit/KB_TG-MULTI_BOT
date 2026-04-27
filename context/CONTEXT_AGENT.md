@@ -3,11 +3,16 @@
 Last updated: 2026-04-27
 Scope: internal working memory for this repository.
 
+## TL;DR (read first)
+
+- **Run:** repo root — `python src/bot.py` or `scripts\run_bot.bat`. **Secrets:** root `.env` → `BOT_TOKEN` (not in Git).
+- **DB:** *Live* = `get_db_path()` in `src/db_path.py` — file **outside** the repo (default: `%LOCALAPPDATA%\KB_TG-MULTI_BOT\database.db`). *Git snapshot* = `data/database.db`. **Root** `database.db*` = junk / ignore / delete, **not** live. Don’t add `data/*.db` to `.gitignore` without agreement.
+- **Owner** (`OWNER_ID`): Admin → «База / импорт» = sync live ↔ `data/`. Also `scripts/*database*.py`.
+
 ## Project Snapshot (EN)
 
-- **Layout:** `src/` — app code (`bot.py`, `db_path.py`); `data/` — **committed** SQLite snapshot (`data/database.db`) for backup/sharing; `scripts/` — run (`run_bot.bat`), DB import/export, `publish-github.*`; `context/`, `VERSION`, root `.env[.example]`, `requirements.txt`.
-- **Telegram bot token** is read from env `BOT_TOKEN` or a local `.env` in repo root (see `.env.example`), never hardcoded in source; entrypoint: `python src/bot.py` or `scripts\run_bot.bat`.
-- **Two database roles:** (1) **live DB** from `get_db_path()` in `src/db_path.py` — default **outside the repo** (e.g. `%LOCALAPPDATA%\\KB_TG-MULTI_BOT\\database.db` on Windows) so `git checkout` / rollback does **not** overwrite working data; optional `DB_PATH` in `.env`. (2) **`data/database.db` in Git** — backup. **Owner** (`OWNER_ID`): Admin «База / импорт» — sync (export live→`data/`, import `data/`→live, confirm on import) via SQLite `backup()`; CLI `scripts/import_database_from_repo.py` / `export_database_to_repo.py`. Do not add `data/*.db` to `.gitignore` without explicit agreement.
+- **Layout:** `src/` (code), `data/` (committed snapshot DB), `scripts/` (run, db tools, publish), `context/`, root `VERSION` + `.env[.example]` + `requirements.txt`.
+- Token: `BOT_TOKEN` in root `.env`; see `.env.example`.
 - Domain: Telegram real estate workflow (staff publishing + client-facing channel usage).
 - Active idea backlog source: `context/CONTEXT_ИДЕЙ.md`.
 - Current important behavior:
@@ -52,11 +57,15 @@ Allowed commit types (and only these): `добавление`, `исправле
 
 ## Перевод на русский (RU)
 
+### Суть (кратко, для агента)
+
+- **Запуск** из **корня** репо: `python src/bot.py` или `scripts\run_bot.bat`. **Токен** — `BOT_TOKEN` в корневом `.env` (в Git не коммитим).
+- **Две БД:** **живая** — `get_db_path()` (`src/db_path.py`, по умолчанию **вне** папки проекта, `git checkout` её не трогает; опция `DB_PATH` в `.env`). **Снимок в Git** — только `data/database.db`. **Файлы `database.db*` в корне репо** — **мусор** (в `.gitignore`), с живой БД **не** связаны — можно удалить.
+- **Владелец** (`OWNER_ID`): админка → «База / импорт» — синхронизация live ↔ `data/`. Скрипты `scripts/*database*.py` — то же с диска. Без согласования не прятать `data/*.db` в `.gitignore`.
+
 ### Снимок проекта
 
-- **Структура:** `src/` — код бота (`bot.py`, `db_path.py`); `data/` — закоммиченный снимок SQLite (`data/database.db`); `scripts/` — `run_bot.bat`, импорт/экспорт БД, публикация в GitHub; `context/`, `VERSION`, корневой `.env` / `.env.example`, `requirements.txt`.
-- **Токен** — из `BOT_TOKEN` / `.env` в корне репо; запуск: `python src/bot.py` или `scripts\run_bot.bat`.
-- **Два уровня БД:** (1) **живая** — `get_db_path()` в `src/db_path.py` (по умолчанию **вне** репо); при необходимости `DB_PATH` в `.env`. (2) **`data/database.db` в Git** — снимок. **Владелец** (`OWNER_ID`): в админке «База / импорт» — кнопки синхронизации (экспорт в `data/`, импорт из `data/` в рабочую БД, с подтверждением на импорт). Скрипты в `scripts/` остаются для ручного запуска. В `.gitignore` `data/*.db` не прятать без согласования.
+- **Структура:** `src/`, `data/`, `scripts/`, `context/`, `VERSION`, `.env[.example]`, `requirements.txt` — как в TL;DR выше.
 - Домен: Telegram-процесс по недвижимости (публикация сотрудниками + клиентский канал).
 - Актуальный бэклог идей: `context/CONTEXT_ИДЕЙ.md`.
 - Важные текущие моменты:
