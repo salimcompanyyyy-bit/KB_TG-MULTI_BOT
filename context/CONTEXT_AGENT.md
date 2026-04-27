@@ -33,6 +33,7 @@ Scope: internal working memory for this repository.
 - Card style restored to classic decorative layout (separator lines). Channel contact button remains removed from publication flow.
 - Card decoration tuned down (medium): fewer separator lines retained only for key section breaks.
 - Card readability tweak: added an empty line after category line (`🏠 ...`) before city/district block.
+- Card separator length reduced from 32 to 24 symbols for a lighter visual look.
 
 ## Working Rules For Agent (EN)
 
@@ -94,6 +95,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Формат карточки возвращен к классическому виду с разделителями; кнопка «Связаться» в канале остается отключенной.
   - Разделители в карточке уменьшены до умеренного уровня: оставлены только ключевые линии между блоками.
   - Для читаемости добавлена пустая строка после строки категории (`🏠 ...`) перед блоком адреса.
+  - Длина разделительных линий уменьшена (с 32 до 24 символов) для более легкого визуала.
 
 ### Рабочие правила для агента
 

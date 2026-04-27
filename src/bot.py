@@ -52,7 +52,7 @@ CHANNEL_ID = '@KapitalBank_Assets'
 OWNER_ID = 120960192  
 DB_PATH = get_db_path()
 # Рамка карточки в канале (одинаковая длина во всех объявлениях)
-CARD_DECO_LINE = "━" * 32
+CARD_DECO_LINE = "━" * 24
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
