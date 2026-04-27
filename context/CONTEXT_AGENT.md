@@ -34,6 +34,7 @@ Scope: internal working memory for this repository.
 - Card decoration tuned down (medium): fewer separator lines retained only for key section breaks.
 - Card readability tweak: added an empty line after category line (`🏠 ...`) before city/district block.
 - Card separator length reduced from 32 to 24 symbols for a lighter visual look.
+- Auto-cleanup update (FSM-only): incoming messages are tracked via message middleware; every 2 bot messages cleanup runs over last 40 tracked IDs and keeps only 2 latest messages.
 
 ## Working Rules For Agent (EN)
 
@@ -96,6 +97,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Разделители в карточке уменьшены до умеренного уровня: оставлены только ключевые линии между блоками.
   - Для читаемости добавлена пустая строка после строки категории (`🏠 ...`) перед блоком адреса.
   - Длина разделительных линий уменьшена (с 32 до 24 символов) для более легкого визуала.
+  - Автоочистка обновлена (без БД): входящие сообщения трекаются middleware, каждые 2 сообщения бота запускается чистка последних 40 tracked-ID с сохранением только 2 последних сообщений.
 
 ### Рабочие правила для агента
 
