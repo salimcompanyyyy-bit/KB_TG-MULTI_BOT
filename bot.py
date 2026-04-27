@@ -3,6 +3,7 @@ import csv
 import io
 import html
 import json
+import os
 import re
 import sqlite3
 import logging
@@ -17,8 +18,26 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
 # --- КОНФИГ ---
-API_TOKEN = 'REDACTED_HISTORICAL_LEAK'
+
+
+def _env_token() -> str:
+    token = (os.environ.get("BOT_TOKEN") or "").strip()
+    if not token:
+        raise RuntimeError(
+            "Задайте BOT_TOKEN: переменная окружения или файл .env (шаблон — .env.example)."
+        )
+    return token
+
+
+API_TOKEN = _env_token()
 CHANNEL_ID = '@KapitalBank_Assets' 
 OWNER_ID = 120960192  
 DB_PATH = "database.db"

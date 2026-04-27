@@ -1,0 +1,16 @@
+# Секреты
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Локальные БД (при необходимости ведёте вручную)
+# database.db
+# database.db-wal
+# database.db-shm

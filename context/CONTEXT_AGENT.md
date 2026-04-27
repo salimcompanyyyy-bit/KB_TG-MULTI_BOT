@@ -1,11 +1,11 @@
 # CONTEXT_AGENT
 
-Last updated: 2026-04-23
+Last updated: 2026-04-27
 Scope: internal working memory for this repository.
 
 ## Project Snapshot (EN)
 
-- Stack: Python bot (`bot.py`) with SQLite (`database.db`).
+- Stack: Python bot (`bot.py`) with SQLite (`database.db`); **Telegram bot token** is read from env `BOT_TOKEN` or a local `.env` file (see `.env.example`), never hardcoded in source.
 - Domain: Telegram real estate workflow (staff publishing + client-facing channel usage).
 - Active idea backlog source: `context/CONTEXT_ИДЕЙ.md`.
 - Current important behavior:
@@ -52,7 +52,7 @@ Allowed commit types (and only these): `добавление`, `исправле
 
 ### Снимок проекта
 
-- Стек: Python-бот (`bot.py`) + SQLite (`database.db`).
+- Стек: Python-бот (`bot.py`) + SQLite (`database.db`); **токен Telegram-бота** берётся из окружения `BOT_TOKEN` или локального `.env` (см. `.env.example`), в исходниках не хранится.
 - Домен: Telegram-процесс по недвижимости (публикация сотрудниками + клиентский канал).
 - Актуальный бэклог идей: `context/CONTEXT_ИДЕЙ.md`.
 - Важные текущие моменты:
