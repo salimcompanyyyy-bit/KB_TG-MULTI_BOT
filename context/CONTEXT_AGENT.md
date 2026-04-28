@@ -40,6 +40,7 @@ Scope: internal working memory for this repository.
 - Auto-cleanup reliability fix: trigger counter moved to `send_step` (every bot step), while middleware only tracks incoming user messages.
 - Auto-cleanup hardening: added fallback range cleanup by recent message_id window to remove untracked leftovers when tracked queue misses messages.
 - Auto-cleanup pause: during "➕ Создать карточку объекта" flow auto-cleanup is paused to preserve media/step messages; it resumes only after returning to main menu.
+- Admin full delete upgraded: owner flow now removes channel post (if possible), deletes DB row from `posts`, removes related log traces by ad number, and resets `posts` sequence when table becomes empty (next ad starts from #1).
 
 ## Working Rules For Agent (EN)
 
@@ -109,6 +110,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Для надежности счетчик триггера перенесен в `send_step` (каждый шаг ответа бота), middleware оставлен только для трекинга входящих сообщений.
   - Усиление автоочистки: добавлена страховочная чистка по диапазону последних message_id, чтобы убирать нетрекнутые хвосты.
 - Пауза автоочистки: в процессе "➕ Создать карточку объекта" автоочистка отключена, чтобы не удалять фото/шаги; включается снова только при возврате в главное меню.
+- Полное удаление в админке усилено: сценарий владельца теперь удаляет пост в канале (если возможно), удаляет запись из `posts`, чистит связанные лог-следы по номеру объявления и сбрасывает sequence `posts`, когда таблица пустая (следующее объявление снова №1).
 
 ### Рабочие правила для агента
 

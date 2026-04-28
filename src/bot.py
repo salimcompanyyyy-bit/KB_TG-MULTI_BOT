@@ -467,6 +467,10 @@ def _post_row_tuple(user_id: int, data: dict, channel_message_id: Optional[int])
 def insert_post(user_id: int, data: dict, channel_message_id: Optional[int] = None) -> int:
     """Вставка строки posts; возвращает id (номер объявления)."""
     with db_connect() as conn:
+        # Если таблица posts пуста, сбрасываем sqlite_sequence, чтобы следующий id начался с 1.
+        row = conn.execute("SELECT COUNT(*) FROM posts").fetchone()
+        if int((row[0] if row else 0) or 0) == 0:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='posts'")
         cur = conn.execute(
             """INSERT INTO posts (user_id, category, realty_type, city, district, street, house,
             total_area, useful_area, rooms, desc, price_val, price_cur, media_type, media_files, channel_message_id)
@@ -491,6 +495,26 @@ def delete_pending_post(post_id: int) -> None:
     with db_connect() as conn:
         conn.execute("DELETE FROM posts WHERE id=? AND channel_message_id IS NULL", (post_id,))
         conn.commit()
+
+
+def delete_post_with_traces(post_id: int) -> int:
+    """Полное удаление: posts + связанные лог-следы по номеру объявления."""
+    with db_connect() as conn:
+        conn.execute("DELETE FROM posts WHERE id=?", (post_id,))
+        # Удаляем все логи, где явно фигурирует этот номер объявления.
+        cur = conn.execute(
+            """DELETE FROM logs
+               WHERE details LIKE ?
+                  OR details LIKE ?
+                  OR details LIKE ?""",
+            (f"%post_id={post_id}%", f"%№{post_id}%", f"%#{post_id}%"),
+        )
+        # Если после удаления таблица пуста — возвращаем нумерацию к старту с 1.
+        row = conn.execute("SELECT COUNT(*) FROM posts").fetchone()
+        if int((row[0] if row else 0) or 0) == 0:
+            conn.execute("DELETE FROM sqlite_sequence WHERE name='posts'")
+        conn.commit()
+        return int(cur.rowcount or 0)
 
 
 def fetch_posts_filtered(city: Optional[str], category: Optional[str], realty_type: Optional[str], limit: int, offset: int):
@@ -2978,7 +3002,7 @@ async def adm_delete_post_start(c: types.CallbackQuery, state: FSMContext):
     await send_step(
         c.message,
         "Введите <b>номер объявления</b> (№ на карточке в канале = id в таблице <code>posts</code>).\n\n"
-        "Удалится запись в базе. Если пост в канале ещё есть и у бота есть право удалять сообщения — бот попробует удалить его "
+        "Удалятся запись в <code>posts</code> и связанные следы в логах. Если пост в канале ещё есть и у бота есть право удалять сообщения — бот попробует удалить его "
         "(альбом из нескольких фото может удалиться не полностью — это ограничение Telegram).",
         kb.adjust(1).as_markup(),
         state,
@@ -3011,10 +3035,12 @@ async def adm_delete_post_do(m: types.Message, state: FSMContext):
             deleted_in_channel = True
         except Exception as e:
             logging.warning("adm_delete_post delete_message: %s", e)
-    with db_connect() as conn:
-        conn.execute("DELETE FROM posts WHERE id=?", (post_id,))
-        conn.commit()
-    add_log(m.from_user.id, "Админ: удаление объявления", f"post_id={post_id}, deleted_in_channel={deleted_in_channel}")
+    deleted_logs = delete_post_with_traces(post_id)
+    add_log(
+        m.from_user.id,
+        "Админ: удаление объявления",
+        f"post_id={post_id}, deleted_in_channel={deleted_in_channel}, deleted_logs={deleted_logs}",
+    )
     await state.clear()
     await state.update_data(app_mode="staff")
     tail = " Сообщение в канале удалено." if deleted_in_channel else (
@@ -3023,7 +3049,7 @@ async def adm_delete_post_do(m: types.Message, state: FSMContext):
     )
     await send_step(
         m,
-        f"✅ Объявление №{post_id} удалено из базы.{tail}",
+        f"✅ Объявление №{post_id} удалено из базы и очищены связанные следы ({deleted_logs} логов).{tail}",
         reply_markup=main_menu_kb(m.from_user.id),
         state=state,
     )
