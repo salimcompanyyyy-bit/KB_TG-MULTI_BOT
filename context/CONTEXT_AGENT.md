@@ -39,6 +39,7 @@ Scope: internal working memory for this repository.
 - Auto-cleanup trigger updated: cleanup now runs every 5 user button presses/messages (not by bot send count).
 - Auto-cleanup reliability fix: trigger counter moved to `send_step` (every bot step), while middleware only tracks incoming user messages.
 - Auto-cleanup hardening: added fallback range cleanup by recent message_id window to remove untracked leftovers when tracked queue misses messages.
+- Auto-cleanup pause: during "➕ Создать карточку объекта" flow auto-cleanup is paused to preserve media/step messages; it resumes only after returning to main menu.
 
 ## Working Rules For Agent (EN)
 
@@ -48,11 +49,12 @@ Scope: internal working memory for this repository.
 - Auto-commit substantial completed changes; push only when user explicitly asks.
 - Keep user-facing communication concise and in Russian.
 - If user message looks like random Latin letters, interpret it as Russian typed with English keyboard layout and respond to converted meaning (ask briefly if ambiguous).
-- Project rule now requires semantic versioning in root `VERSION` (current baseline: `1.0.0`) and commit subject format `vX.Y.Z: ...`.
+- Project rule now requires semantic versioning in root `VERSION` (current baseline: `2.0.0`) and commit subject format `vX.Y.Z: ...`.
 - Commit title standard is strict: `vX.Y.Z: <тип> - <кратко>` where `<тип>` is one Russian word from fixed list and `<кратко>` is 2-4 words.
 - ВАЖНО: даже технические коммиты (включая `git revert`) обязательно оформлять по шаблону `vX.Y.Z: <тип> - <кратко>`; стандартные сообщения вида `Revert "..."` не использовать.
 - All clarifying questions to user must be asked via Ask Question only.
-- Version policy for this repository is fixed to `1.0.x` by default; increment PATCH only unless user explicitly approves MINOR/MAJOR bump.
+- Version policy for this repository is fixed to `2.0.x` by default; increment PATCH only unless user explicitly approves MINOR/MAJOR bump.
+- Rules sync (2026-04-28): project rule now requires reading both `context/CONTEXT_AGENT.md` and `context/CONTEXT_ИДЕЙ.md` before substantial edits; base version line moved to `2.0.x`; completed code/rule tasks must end with a commit unless user explicitly forbids it.
 
 ## Known Pending Product Items (EN)
 
@@ -106,6 +108,7 @@ Allowed commit types (and only these): `добавление`, `исправле
   - Триггер автоочистки изменен: запуск теперь каждые 5 нажатий/сообщений пользователя, а не по количеству сообщений бота.
   - Для надежности счетчик триггера перенесен в `send_step` (каждый шаг ответа бота), middleware оставлен только для трекинга входящих сообщений.
   - Усиление автоочистки: добавлена страховочная чистка по диапазону последних message_id, чтобы убирать нетрекнутые хвосты.
+- Пауза автоочистки: в процессе "➕ Создать карточку объекта" автоочистка отключена, чтобы не удалять фото/шаги; включается снова только при возврате в главное меню.
 
 ### Рабочие правила для агента
 
@@ -115,11 +118,12 @@ Allowed commit types (and only these): `добавление`, `исправле
 - Существенные завершенные изменения коммитить автоматически; push делать только по явной просьбе пользователя.
 - Писать пользователю кратко и на русском.
 - Если сообщение похоже на случайный набор латиницы, трактовать его как русский текст в английской раскладке и отвечать по конвертированному смыслу (при сомнениях коротко уточнять).
-- Правило проекта теперь требует семантическую версию в корневом `VERSION` (текущая базовая: `1.0.0`) и формат заголовка коммита `vX.Y.Z: ...`.
+- Правило проекта теперь требует семантическую версию в корневом `VERSION` (текущая базовая: `2.0.0`) и формат заголовка коммита `vX.Y.Z: ...`.
 - Стандарт заголовка коммита строгий: `vX.Y.Z: <тип> - <кратко>`, где `<тип>` — одно русское слово из фиксированного списка, а `<кратко>` — 2-4 слова по сути изменения.
 - ВАЖНО: даже технические коммиты (включая `git revert`) обязательно оформлять по шаблону `vX.Y.Z: <тип> - <кратко>`; стандартные сообщения вида `Revert "..."` не использовать.
 - Любые уточняющие вопросы пользователю задавать только через Ask Question.
-- Политика версий для этого репозитория по умолчанию фиксирована на `1.0.x`; повышать только PATCH, пока пользователь явно не согласует MINOR/MAJOR.
+- Политика версий для этого репозитория по умолчанию фиксирована на `2.0.x`; повышать только PATCH, пока пользователь явно не согласует MINOR/MAJOR.
+- Синхронизация правил (2026-04-28): перед существенными правками обязательно читать и `context/CONTEXT_AGENT.md`, и `context/CONTEXT_ИДЕЙ.md`; базовая ветка версий обновлена на `2.0.x`; завершенные задачи по коду/правилам должны завершаться коммитом, если пользователь явно не запретил коммит.
 
 ### Известные незавершенные пункты
 

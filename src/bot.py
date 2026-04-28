@@ -80,6 +80,7 @@ CLEANUP_BOT_IDS_KEY = "cleanup_bot_message_ids"
 CLEANUP_USER_IDS_KEY = "cleanup_user_message_ids"
 CLEANUP_ORDER_IDS_KEY = "cleanup_order_message_ids"
 CLEANUP_PRESS_COUNTER_KEY = "cleanup_press_counter"
+AUTO_CLEANUP_PAUSED_KEY = "auto_cleanup_paused"
 CLEANUP_MAX_IDS = 80
 AUTO_CLEANUP_WINDOW = 40
 AUTO_CLEANUP_KEEP_LAST = 2
@@ -126,6 +127,7 @@ async def clear_state_preserve_cleanup(state: FSMContext):
         if ids:
             keep[key] = ids
     keep[CLEANUP_PRESS_COUNTER_KEY] = data.get(CLEANUP_PRESS_COUNTER_KEY, 0)
+    keep[AUTO_CLEANUP_PAUSED_KEY] = bool(data.get(AUTO_CLEANUP_PAUSED_KEY, False))
     last_msg_id = data.get("last_msg_id")
     if last_msg_id:
         keep["last_msg_id"] = last_msg_id
@@ -1009,10 +1011,14 @@ async def send_step(m_obj, text, reply_markup=None, state: FSMContext = None):
             await state.update_data(last_msg_id=new_msg.message_id)
             await remember_cleanup_message(state, new_msg, is_user=False)
             counter_data = await state.get_data()
-            press_counter = int(counter_data.get(CLEANUP_PRESS_COUNTER_KEY, 0)) + 1
-            if press_counter >= AUTO_CLEANUP_EVERY_BUTTON_PRESSES:
-                await auto_cleanup_recent_messages(chat_id, state)
+            cleanup_paused = bool(counter_data.get(AUTO_CLEANUP_PAUSED_KEY, False))
+            if cleanup_paused:
                 press_counter = 0
+            else:
+                press_counter = int(counter_data.get(CLEANUP_PRESS_COUNTER_KEY, 0)) + 1
+                if press_counter >= AUTO_CLEANUP_EVERY_BUTTON_PRESSES:
+                    await auto_cleanup_recent_messages(chat_id, state)
+                    press_counter = 0
             await state.update_data(**{CLEANUP_PRESS_COUNTER_KEY: press_counter})
     except Exception as e:
         logging.error(f"Error in send_step: {e}")
@@ -3035,7 +3041,8 @@ async def start_post(m: types.Message, state: FSMContext):
     await try_delete_trigger_message(m)
     await purge_cleanup_messages(chat_id=m.chat.id, state=state, try_delete_user_messages=True)
     await clear_state_preserve_cleanup(state)
-    await state.update_data(app_mode="staff")
+    await state.update_data(app_mode="staff", **{AUTO_CLEANUP_PAUSED_KEY: True, CLEANUP_PRESS_COUNTER_KEY: 0})
+    logging.debug("auto-cleanup paused: start post flow user_id=%s chat_id=%s", m.from_user.id, m.chat.id)
     await state.set_state(PostState.category)
     kb = InlineKeyboardBuilder()
     kb.button(text="🏠 Жилое", callback_data="cat_living")
@@ -3655,9 +3662,7 @@ def build_card_text(
 
     rooms_text = f"🔢 Комнат: {rooms}" if rooms else ""
     price_text = f"💰 ЦЕНА: {price_val:,} {price_cur}".replace(",", " ") if price_val and price_cur else ""
-    desc_text = f"📝 Детали: {desc}" if desc else ""
-
-    sep = f"{CARD_DECO_LINE}\n"
+    desc_text = f"📝 Доп.информация: {desc}" if desc else ""
 
     card_text = ""
     if listing_no is not None:
@@ -3675,9 +3680,9 @@ def build_card_text(
         card_text += f"{area_text}\n"
     if desc_text:
         card_text += f"{desc_text}\n"
-    card_text += sep
+    card_text += "\n"
     if price_text:
-        card_text += f"{price_text}\n{sep}"
+        card_text += f"{price_text}\n\n"
     card_text += f"{emp}\n"
     contacts: list[str] = []
     if contact_phone and str(contact_phone).strip():
@@ -3687,7 +3692,7 @@ def build_card_text(
         contacts.append(f"@{html.escape(u)}")
     if contacts:
         card_text += " ".join(contacts) + "\n"
-    card_text += sep.rstrip("\n")
+    card_text = card_text.rstrip()
     return card_text
 
 
@@ -3808,7 +3813,13 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
             conn.execute("INSERT INTO logs (user_id, action, details) VALUES (?, ?, ?)", 
                         (c.from_user.id, "Публикация", f"Опубликована карточка №{post_id}: {category} - {realty_type}"))
         await state.clear()
-        await state.update_data(app_mode="staff")
+        await state.update_data(app_mode="staff", **{AUTO_CLEANUP_PAUSED_KEY: False, CLEANUP_PRESS_COUNTER_KEY: 0})
+        logging.debug(
+            "auto-cleanup resumed: post published user_id=%s chat_id=%s post_id=%s",
+            c.from_user.id,
+            c.message.chat.id,
+            post_id,
+        )
         await send_step(
             c,
             f"✅ Карточка опубликована в канале.\n<b>Номер объявления: №{post_id}</b>",
@@ -3826,7 +3837,8 @@ async def publish_post(c: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_publish")
 async def cancel_publish(c: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await state.update_data(app_mode="staff")
+    await state.update_data(app_mode="staff", **{AUTO_CLEANUP_PAUSED_KEY: False, CLEANUP_PRESS_COUNTER_KEY: 0})
+    logging.debug("auto-cleanup resumed: publish canceled user_id=%s chat_id=%s", c.from_user.id, c.message.chat.id)
     await send_step(c, "Публикация отменена. Вы вернулись в главное меню", reply_markup=main_menu_kb(c.from_user.id), state=state)
     await c.answer()
 
@@ -3884,7 +3896,8 @@ async def go_back(c: types.CallbackQuery, state: FSMContext):
         await state.update_data(app_mode="client")
         await send_step(c, "Меню клиента.", reply_markup=client_menu_kb(), state=state)
     else:
-        await state.update_data(app_mode="staff")
+        await state.update_data(app_mode="staff", **{AUTO_CLEANUP_PAUSED_KEY: False, CLEANUP_PRESS_COUNTER_KEY: 0})
+        logging.debug("auto-cleanup resumed: go_back to staff menu user_id=%s chat_id=%s", c.from_user.id, c.message.chat.id)
         await send_step(c, "Вы вернулись в главное меню", reply_markup=main_menu_kb(c.from_user.id), state=state)
     await c.answer()
 
